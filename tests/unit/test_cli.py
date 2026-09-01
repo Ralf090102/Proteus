@@ -27,16 +27,18 @@ def test_doctor_runs_successfully():
     assert "docx -> md" in result.stdout
     assert "md -> docx" in result.stdout
     assert "md -> pdf" in result.stdout
+    assert "pdf -> docx" in result.stdout
+    assert "pdf -> txt" in result.stdout
 
 
 def test_convert_unregistered_pair_exits_nonzero(tmp_path):
-    input_file = tmp_path / "in.pdf"
+    input_file = tmp_path / "in.txt"
     input_file.write_text("placeholder")
-    result = runner.invoke(app, ["convert", str(input_file), "--to", "docx"])
+    result = runner.invoke(app, ["convert", str(input_file), "--to", "pdf"])
     assert result.exit_code == 1
     # Errors go to stderr (Unix convention) — check the combined stream.
+    assert "txt" in result.output
     assert "pdf" in result.output
-    assert "docx" in result.output
 
 
 def test_convert_missing_input_file_exits_nonzero(tmp_path):

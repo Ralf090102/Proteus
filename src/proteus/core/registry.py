@@ -17,6 +17,7 @@ from collections.abc import Mapping
 from proteus.converters.chains import MarkdownToPdfChainConverter
 from proteus.converters.libreoffice import LibreOfficeConverter
 from proteus.converters.pandoc import DocxToMarkdownConverter, MarkdownToDocxConverter
+from proteus.converters.pdf_extract import Pdf2DocxConverter, PyMuPdfTextExtractConverter
 from proteus.core.converter import Converter
 from proteus.core.errors import UnknownConversionError
 
@@ -25,6 +26,8 @@ CONVERTER_REGISTRY: dict[tuple[str, str], type[Converter]] = {
     ("docx", "md"): DocxToMarkdownConverter,
     ("md", "docx"): MarkdownToDocxConverter,
     ("md", "pdf"): MarkdownToPdfChainConverter,
+    ("pdf", "docx"): Pdf2DocxConverter,
+    ("pdf", "txt"): PyMuPdfTextExtractConverter,
 }
 
 

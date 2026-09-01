@@ -380,12 +380,14 @@ dependencies = [
 [package.optional-dependencies]
 dev = [
     { name = "pytest" },
+    { name = "python-docx" },
     { name = "ruff" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
+    { name = "python-docx" },
     { name = "ruff" },
 ]
 
@@ -395,6 +397,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2" },
     { name = "pymupdf", specifier = ">=1.24" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+    { name = "python-docx", marker = "extra == 'dev'", specifier = ">=1.1" },
     { name = "rich", specifier = ">=13" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "typer", specifier = ">=0.15" },
@@ -404,6 +407,7 @@ provides-extras = ["dev"]
 [package.metadata.requires-dev]
 dev = [
     { name = "pytest", specifier = ">=8" },
+    { name = "python-docx", specifier = ">=1.1" },
     { name = "ruff", specifier = ">=0.6" },
 ]
 
