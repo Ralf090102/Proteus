@@ -8,6 +8,8 @@ contention if multiple calls happen back to back.
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 from pathlib import Path
 
 from proteus.core.converter import (
@@ -41,31 +43,44 @@ class LibreOfficeConverter(Converter):
                 f"{self.from_ext}->{self.to_ext}."
             )
 
-        with isolated_libreoffice_profile() as profile_arg:
-            run_subprocess(
-                [
-                    str(status.path),
-                    "--headless",
-                    profile_arg,
-                    "--convert-to",
-                    "pdf",
-                    "--outdir",
-                    str(output_path.parent),
-                    str(input_path),
-                ]
-            )
+        # LibreOffice always names its output <input-stem>.pdf and writes
+        # it directly into --outdir, unconditionally overwriting anything
+        # already there under that name — pointing --outdir at an
+        # isolated temp dir (rather than output_path.parent, the real
+        # destination) means that can never collide with and silently
+        # clobber an unrelated file that happens to share the input's
+        # stem. The only write into the real destination is the final
+        # move below, and only at the exact path the caller asked for.
+        with tempfile.TemporaryDirectory(prefix="proteus-soffice-out-") as tmp_outdir:
+            with isolated_libreoffice_profile() as profile_arg:
+                run_subprocess(
+                    [
+                        str(status.path),
+                        "--headless",
+                        profile_arg,
+                        "--convert-to",
+                        "pdf",
+                        "--outdir",
+                        tmp_outdir,
+                        str(input_path),
+                    ]
+                )
 
-        # LibreOffice always names its output <input-stem>.pdf inside
-        # --outdir, regardless of the caller's requested filename. Verify
-        # it actually landed — soffice can exit 0 without producing output
-        # under profile-lock contention or on some malformed inputs — then
-        # move it into place if that doesn't already match output_path.
-        produced = output_path.parent / f"{input_path.stem}.pdf"
-        ensure_output_created(produced, "LibreOffice")
+            # Verify it actually landed — soffice can exit 0 without
+            # producing output under profile-lock contention or on some
+            # malformed inputs.
+            produced = Path(tmp_outdir) / f"{input_path.stem}.pdf"
+            ensure_output_created(produced, "LibreOffice")
 
-        if produced != output_path:
             try:
-                produced.replace(output_path)
+                # shutil.move(), not Path.replace()/os.replace(): the temp
+                # staging dir and the real destination can be on different
+                # drives (the common case for this repo — %TEMP% is on C:,
+                # the project is on D:), and os.replace()'s MoveFileExW
+                # call has no MOVEFILE_COPY_ALLOWED fallback for that —
+                # it fails outright with WinError 17 cross-drive.
+                # shutil.move() falls back to copy+delete automatically.
+                shutil.move(str(produced), str(output_path))
             except OSError as e:
                 raise ConversionFailedError(
                     f"LibreOffice produced {produced} but couldn't move it to "

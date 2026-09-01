@@ -121,6 +121,33 @@ def test_uninstall_context_menu_reports_nothing_installed(monkeypatch):
     assert "No proteus context-menu entries" in result.stdout
 
 
+def test_install_context_menu_reports_os_error_cleanly(monkeypatch):
+    # Regression: a winreg failure other than the "not on PATH"
+    # RuntimeError (e.g. access denied) used to escape as a raw
+    # unhandled traceback instead of a clean CLI error.
+    def raise_os_error():
+        raise OSError("Access is denied")
+
+    monkeypatch.setattr(cli_module.context_menu, "install", raise_os_error)
+    result = runner.invoke(app, ["install-context-menu"])
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Access is denied" in result.output
+
+
+def test_uninstall_context_menu_reports_os_error_cleanly(monkeypatch):
+    # Regression: uninstall-context-menu had no error handling at all —
+    # any winreg failure crashed with a raw traceback.
+    def raise_os_error():
+        raise OSError("Access is denied")
+
+    monkeypatch.setattr(cli_module.context_menu, "uninstall", raise_os_error)
+    result = runner.invoke(app, ["uninstall-context-menu"])
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Access is denied" in result.output
+
+
 def test_convert_from_context_menu_success_reveals_in_explorer_not_console(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(cli_module.subprocess, "Popen", lambda cmd: calls.append(cmd))

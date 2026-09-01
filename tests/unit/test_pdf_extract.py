@@ -4,6 +4,7 @@ against the committed sample.pdf fixture."""
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -60,3 +61,24 @@ def test_pymupdf_raises_conversion_failed_for_invalid_pdf(tmp_path):
 
     with pytest.raises(ConversionFailedError):
         PyMuPdfTextExtractConverter().convert(bad_pdf, tmp_path / "out.txt", ConversionOptions())
+
+
+def test_pdf2docx_import_failure_surfaces_as_conversion_failed(monkeypatch, tmp_path):
+    # Regression: the lazy `from pdf2docx import Converter` sat outside
+    # convert()'s try/except — a broken/partial pdf2docx install would
+    # crash with a raw ImportError instead of ConversionFailedError.
+    # `None` in sys.modules is the standard way to force `import x` to
+    # raise ImportError without needing pdf2docx to actually be missing.
+    monkeypatch.setitem(sys.modules, "pdf2docx", None)
+
+    with pytest.raises(ConversionFailedError):
+        Pdf2DocxConverter().convert(SAMPLE_PDF, tmp_path / "out.docx", ConversionOptions())
+
+
+def test_pymupdf_import_failure_surfaces_as_conversion_failed(monkeypatch, tmp_path):
+    monkeypatch.setitem(sys.modules, "pymupdf", None)
+
+    with pytest.raises(ConversionFailedError):
+        PyMuPdfTextExtractConverter().convert(
+            SAMPLE_PDF, tmp_path / "out.txt", ConversionOptions()
+        )

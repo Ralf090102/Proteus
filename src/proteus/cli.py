@@ -137,8 +137,8 @@ def install_context_menu() -> None:
     pair (HKCU only — no admin rights needed)."""
     try:
         installed = context_menu.install()
-    except RuntimeError as e:
-        error_console.print(f"[bold red]Error:[/bold red] {escape(str(e))}")
+    except (RuntimeError, OSError) as e:
+        _report_error(str(e), from_context_menu=False)
         raise typer.Exit(1) from None
 
     console.print(f"[bold green]Installed[/bold green] {len(installed)} context-menu verb(s):")
@@ -149,7 +149,12 @@ def install_context_menu() -> None:
 @app.command(name="uninstall-context-menu")
 def uninstall_context_menu() -> None:
     """Remove every proteus-installed right-click verb."""
-    removed = context_menu.uninstall()
+    try:
+        removed = context_menu.uninstall()
+    except OSError as e:
+        _report_error(str(e), from_context_menu=False)
+        raise typer.Exit(1) from None
+
     if not removed:
         console.print("[yellow]No proteus context-menu entries were installed.[/yellow]")
         return

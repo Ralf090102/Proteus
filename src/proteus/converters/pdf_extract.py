@@ -41,10 +41,10 @@ class Pdf2DocxConverter(Converter):
     def convert(
         self, input_path: Path, output_path: Path, options: ConversionOptions
     ) -> ConversionResult:
-        from pdf2docx import Converter as Pdf2DocxLibConverter
-
         cv = None
         try:
+            from pdf2docx import Converter as Pdf2DocxLibConverter
+
             cv = Pdf2DocxLibConverter(str(input_path))
             cv.convert(str(output_path))
         except Exception as e:
@@ -78,9 +78,9 @@ class PyMuPdfTextExtractConverter(Converter):
     ) -> ConversionResult:
         """Extract text via PyMuPDF (imported as `pymupdf` — the `fitz`
         alias is deprecated as of the pinned version)."""
-        import pymupdf
-
         try:
+            import pymupdf
+
             with pymupdf.open(str(input_path)) as doc:
                 text = "\n".join(page.get_text() for page in doc)
             output_path.write_text(text, encoding="utf-8")

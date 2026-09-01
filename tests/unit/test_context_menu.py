@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from proteus.core.dependencies import AvailabilityStatus
 from proteus.core.registry import CONVERTER_REGISTRY
 from proteus.windows import context_menu as context_menu_module
 
@@ -34,6 +35,7 @@ class _FakeWinreg:
 
     HKEY_CURRENT_USER = "HKEY_CURRENT_USER"
     KEY_ALL_ACCESS = 0xF003F
+    KEY_READ = 0x20019
     REG_SZ = 1
 
     def __init__(self):
@@ -92,12 +94,20 @@ def fake_winreg(monkeypatch):
 def fake_proteus_exe(monkeypatch, tmp_path):
     exe_path = tmp_path / "proteus.exe"
     exe_path.write_text("placeholder")
-    monkeypatch.setattr(context_menu_module.shutil, "which", lambda _: str(exe_path))
+    monkeypatch.setattr(
+        context_menu_module,
+        "find_tool",
+        lambda *a, **k: AvailabilityStatus(True, exe_path, "path"),
+    )
     return exe_path
 
 
-def test_proteus_exe_path_raises_when_not_on_path(monkeypatch):
-    monkeypatch.setattr(context_menu_module.shutil, "which", lambda _: None)
+def test_proteus_exe_path_raises_when_not_found(monkeypatch):
+    monkeypatch.setattr(
+        context_menu_module,
+        "find_tool",
+        lambda *a, **k: AvailabilityStatus(False, None, "not-found"),
+    )
     with pytest.raises(RuntimeError, match="uv tool install"):
         context_menu_module._proteus_exe_path()
 
@@ -156,3 +166,28 @@ def test_uninstall_after_install_leaves_no_proteus_keys(fake_winreg, fake_proteu
 def test_uninstall_on_clean_state_is_a_noop_not_an_error(fake_winreg):
     removed = context_menu_module.uninstall()
     assert removed == []
+
+
+def test_uninstall_reports_only_pairs_actually_installed_not_current_registry(
+    fake_winreg, fake_proteus_exe, monkeypatch
+):
+    # Regression: uninstall() must report what was ACTUALLY removed
+    # (determined from real registry state), not just "everything
+    # CONVERTER_REGISTRY currently lists for this from_ext" — those can
+    # diverge if Proteus was upgraded (registry gained a pair) between
+    # install and uninstall; a pair added after install ran was never
+    # actually registered and must not be falsely reported as removed.
+    monkeypatch.setattr(context_menu_module, "CONVERTER_REGISTRY", {("docx", "pdf"): object()})
+    context_menu_module.install()
+
+    # Simulate an upgrade: the registry now also lists docx -> md, but
+    # that pair was never actually installed into the real registry.
+    monkeypatch.setattr(
+        context_menu_module,
+        "CONVERTER_REGISTRY",
+        {("docx", "pdf"): object(), ("docx", "md"): object()},
+    )
+
+    removed = context_menu_module.uninstall()
+
+    assert removed == ["docx -> pdf"]

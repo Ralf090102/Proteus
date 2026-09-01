@@ -1,8 +1,8 @@
 # Proteus
 
-Local, privacy-first document-format converter. CLI first (Typer + rich), with an optional
-Windows Explorer right-click context-menu layer added later. No file ever leaves the machine —
-all conversion goes through local tools (Pandoc, LibreOffice) or in-process libraries.
+Local, privacy-first document-format converter. CLI first (Typer + rich), plus a Windows
+Explorer right-click context-menu layer. No file ever leaves the machine — all conversion goes
+through local tools (Pandoc, LibreOffice) or in-process libraries.
 
 ## Status
 
@@ -29,9 +29,11 @@ pair is a small `Converter` implementation registered under a `(from_ext, to_ext
   both LibreOffice and Pandoc during development).
 - `converters/` — one module per backend (`libreoffice.py`, `pandoc.py`, `pdf_extract.py`,
   `chains.py` for composite conversions like `md → pdf`).
-- `windows/context_menu.py` — `winreg`-based install/uninstall of static right-click verbs
-  under `HKCU\Software\Classes\SystemFileAssociations\.{ext}\shell\proteus_convert_to_{ext}`,
-  derived from the registry. No COM/DLL — HKCU-only, no admin rights needed. All keys
+- `windows/context_menu.py` — `winreg`-based install/uninstall of a nested "Proteus" cascading
+  submenu per source extension, under
+  `HKCU\Software\Classes\SystemFileAssociations\.{ext}\shell\proteus_menu\shell\proteus_convert_to_{ext}`
+  (the `proteus_menu` parent sets `MUIVerb`/`SubCommands=""`, the documented static-cascading-menu
+  mechanism), derived from the registry. No COM/DLL — HKCU-only, no admin rights needed. All keys
   `proteus_`-prefixed so uninstall removes exactly what install created.
 - `cli.py` — the Typer app (`proteus convert`, `list-formats`, `doctor`,
   `install-context-menu` / `uninstall-context-menu`).
@@ -44,9 +46,8 @@ LibreOffice, chained), `pdf→docx` (`pdf2docx`), `pdf→txt` (PyMuPDF).
 ## Explicitly deferred (not forgotten)
 
 pptx/xlsx conversions, OCR / scanned-PDF text, batch/folder conversion, any GUI or web UI,
-cascading context-menu submenus, packaging beyond `uv tool install`, vendoring Pandoc/LibreOffice.
-Don't build these speculatively — the registry design keeps them cheap to add when actually
-needed.
+packaging beyond `uv tool install`, vendoring Pandoc/LibreOffice. Don't build these
+speculatively — the registry design keeps them cheap to add when actually needed.
 
 ## Development
 
@@ -62,7 +63,7 @@ uv run pytest -m integration   # also exercises real Pandoc/LibreOffice — need
 - `src/` layout; package name is `proteus`, import root is `proteus`.
 - External tools (LibreOffice, Pandoc) are invoked as subprocesses, never vendored.
 - Every real converter that shells out to an external tool (LibreOffice, Pandoc) needs a
-  matching `tests/unit` test against a fake/double (mocked `shutil.which`/`run_subprocess`),
+  matching `tests/unit` test against a fake/double (mocked `find_tool`/`run_subprocess`),
   plus an opt-in `tests/integration` test against the real tool once that phase is reached.
   Exception: a converter wrapping a Python library that's a hard dependency (`pdf2docx`,
   PyMuPDF) has no "might not be installed" uncertainty to mock around, so its `tests/unit`

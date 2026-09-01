@@ -18,16 +18,18 @@ so uninstall() removes exactly what install() created and nothing else.
 
 from __future__ import annotations
 
-import shutil
 import winreg
 from pathlib import Path
 
+from proteus.core.dependencies import find_tool
 from proteus.core.registry import CONVERTER_REGISTRY
 
 MENU_KEY_NAME = "proteus_menu"
 MENU_DISPLAY_NAME = "Proteus"
 VERB_PREFIX = "proteus_convert_to_"
 CLASSES_ROOT = winreg.HKEY_CURRENT_USER
+PROTEUS_BIN = "proteus"
+PROTEUS_ENV_VAR = "PROTEUS_EXE_PATH"
 
 
 def _verb_name(to_ext: str) -> str:
@@ -38,20 +40,32 @@ def _menu_key_path(from_ext: str) -> str:
     return rf"Software\Classes\SystemFileAssociations\.{from_ext}\shell\{MENU_KEY_NAME}"
 
 
+def _pairs_by_from_ext() -> dict[str, list[str]]:
+    """CONVERTER_REGISTRY grouped by from_ext, computed once and reused by
+    both install() and uninstall() instead of each re-deriving it."""
+    grouped: dict[str, list[str]] = {}
+    for from_ext, to_ext in sorted(CONVERTER_REGISTRY.keys()):
+        grouped.setdefault(from_ext, []).append(to_ext)
+    return grouped
+
+
 def _proteus_exe_path() -> Path:
     """Resolve the installed `proteus` CLI's own absolute exe path.
 
     Explorer launches the registered command with no working directory
     or project-venv context of its own, so this needs a stable, global
-    path — exactly what `uv tool install .` provides.
+    path — exactly what `uv tool install .` provides. Goes through
+    find_tool() (env override -> PATH -> known `uv tool install` location)
+    rather than a bare shutil.which(), for the same PATH-unreliability
+    reason LibreOffice/Pandoc do.
     """
-    which_result = shutil.which("proteus")
-    if which_result is None:
+    status = find_tool(PROTEUS_BIN, env_var=PROTEUS_ENV_VAR)
+    if not status.available:
         raise RuntimeError(
             "proteus isn't on PATH. Run `uv tool install .` first so the context "
             "menu has a stable exe path to point at."
         )
-    return Path(which_result).resolve()
+    return status.path.resolve()
 
 
 def install() -> list[str]:
@@ -61,15 +75,14 @@ def install() -> list[str]:
     Returns the "from -> to" pairs installed.
     """
     exe_path = _proteus_exe_path()
-
-    from_exts = sorted({from_ext for from_ext, _ in CONVERTER_REGISTRY})
-    for from_ext in from_exts:
-        _install_menu(from_ext)
+    pairs_by_ext = _pairs_by_from_ext()
 
     installed = []
-    for from_ext, to_ext in sorted(CONVERTER_REGISTRY.keys()):
-        _install_verb(exe_path, from_ext, to_ext)
-        installed.append(f"{from_ext} -> {to_ext}")
+    for from_ext, to_exts in pairs_by_ext.items():
+        _install_menu(from_ext)
+        for to_ext in to_exts:
+            _install_verb(exe_path, from_ext, to_ext)
+            installed.append(f"{from_ext} -> {to_ext}")
     return installed
 
 
@@ -101,17 +114,40 @@ def uninstall() -> list[str]:
 
     Safe to call even if nothing (or only some extensions) were
     installed — missing keys are skipped, not an error. Returns the
-    "from -> to" pairs actually removed.
+    "from -> to" pairs actually removed, determined by what verb subkeys
+    genuinely existed (not by what CONVERTER_REGISTRY currently lists —
+    those can diverge if Proteus was upgraded between install and
+    uninstall, e.g. a pair added after install ran was never actually
+    registered, so it must not be reported as removed).
     """
     removed = []
-    from_exts = sorted({from_ext for from_ext, _ in CONVERTER_REGISTRY})
-    for from_ext in from_exts:
-        pairs_for_ext = sorted(
-            to_ext for f_ext, to_ext in CONVERTER_REGISTRY if f_ext == from_ext
-        )
-        if _delete_key_tree(CLASSES_ROOT, _menu_key_path(from_ext)):
-            removed.extend(f"{from_ext} -> {to_ext}" for to_ext in pairs_for_ext)
+    for from_ext in _pairs_by_from_ext():
+        menu_path = _menu_key_path(from_ext)
+        actual_verbs = _list_immediate_subkeys(CLASSES_ROOT, rf"{menu_path}\shell")
+        if _delete_key_tree(CLASSES_ROOT, menu_path):
+            for verb in actual_verbs:
+                if verb.startswith(VERB_PREFIX):
+                    to_ext = verb.removeprefix(VERB_PREFIX)
+                    removed.append(f"{from_ext} -> {to_ext}")
     return removed
+
+
+def _list_immediate_subkeys(root: int, path: str) -> list[str]:
+    """List path's direct subkey names, without modifying anything.
+    Returns an empty list if path doesn't exist."""
+    names = []
+    try:
+        with winreg.OpenKey(root, path, 0, winreg.KEY_READ) as key:
+            index = 0
+            while True:
+                try:
+                    names.append(winreg.EnumKey(key, index))
+                except OSError:
+                    break
+                index += 1
+    except FileNotFoundError:
+        pass
+    return names
 
 
 def _delete_key_tree(root: int, path: str) -> bool:
