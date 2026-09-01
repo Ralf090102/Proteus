@@ -49,14 +49,23 @@ class LibreOfficeConverter(Converter):
             )
 
         # LibreOffice always names its output <input-stem>.pdf inside
-        # --outdir, regardless of the caller's requested filename — move
-        # it into place if that doesn't already match output_path.
+        # --outdir, regardless of the caller's requested filename. Verify
+        # it actually landed — soffice can exit 0 without producing output
+        # under profile-lock contention or on some malformed inputs — then
+        # move it into place if that doesn't already match output_path.
         produced = output_path.parent / f"{input_path.stem}.pdf"
+        if not produced.exists():
+            raise ConversionFailedError(
+                f"LibreOffice reported success but {produced} wasn't created"
+            )
+
         if produced != output_path:
-            if not produced.exists():
+            try:
+                produced.replace(output_path)
+            except OSError as e:
                 raise ConversionFailedError(
-                    f"LibreOffice reported success but {produced} wasn't created"
-                )
-            produced.replace(output_path)
+                    f"LibreOffice produced {produced} but couldn't move it to "
+                    f"{output_path} (destination may be open elsewhere): {e}"
+                ) from e
 
         return ConversionResult(output_path=output_path)

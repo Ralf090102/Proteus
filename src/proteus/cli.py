@@ -12,6 +12,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from proteus.core.converter import ConversionOptions
@@ -52,16 +53,24 @@ def convert(
     """Convert INPUT_FILE to the format given by --to."""
     from_ext = input_file.suffix.lstrip(".").lower()
     to_ext = to.lstrip(".").lower()
+
+    if not to_ext or not to_ext.isalnum():
+        error_console.print(
+            f"[bold red]Error:[/bold red] Invalid target format {escape(repr(to))} — "
+            "expected a bare extension like 'pdf'."
+        )
+        raise typer.Exit(1)
+
     output_path = output if output is not None else input_file.with_suffix(f".{to_ext}")
 
     try:
         converter = get_converter(from_ext, to_ext)
         result = converter.convert(input_file, output_path, ConversionOptions())
     except ProteusError as e:
-        error_console.print(f"[bold red]Error:[/bold red] {e}")
+        error_console.print(f"[bold red]Error:[/bold red] {escape(str(e))}")
         raise typer.Exit(1) from None
 
-    console.print(f"[bold green]Converted[/bold green] -> {result.output_path}")
+    console.print(f"[bold green]Converted[/bold green] -> {escape(str(result.output_path))}")
 
 
 @app.command(name="list-formats")
