@@ -6,19 +6,21 @@ This module only knows about extension-pair tuples and the Converter
 class each one maps to; it has zero knowledge of the CLI or any specific
 backend.
 
-Empty until Phase 3, when the first real converter (LibreOffice docx->pdf)
-registers here. Adding a later pair (e.g. pptx->pdf) is a one-line
-addition, not a redesign.
+Adding a later pair (e.g. pptx->pdf) is a one-line addition, not a
+redesign.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 
+from proteus.converters.libreoffice import LibreOfficeConverter
 from proteus.core.converter import Converter
 from proteus.core.errors import UnknownConversionError
 
-CONVERTER_REGISTRY: dict[tuple[str, str], type[Converter]] = {}
+CONVERTER_REGISTRY: dict[tuple[str, str], type[Converter]] = {
+    ("docx", "pdf"): LibreOfficeConverter,
+}
 
 
 def get_converter(

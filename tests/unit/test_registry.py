@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import pytest
 
+from proteus.converters.libreoffice import LibreOfficeConverter
 from proteus.core.errors import UnknownConversionError
 from proteus.core.registry import CONVERTER_REGISTRY, get_converter
 
 
-def test_converter_registry_starts_empty():
-    # Real converters land in Phase 3 — asserting this stays true until
-    # then catches an accidental early registration.
-    assert CONVERTER_REGISTRY == {}
+def test_docx_to_pdf_registered_to_libreoffice_converter():
+    assert CONVERTER_REGISTRY[("docx", "pdf")] is LibreOfficeConverter
 
 
 def test_get_converter_known_pair_constructs_instance(fake_converter):
@@ -38,8 +37,11 @@ def test_get_converter_empty_registry_raises_with_none_registered_message():
     assert "none registered yet" in str(exc_info.value)
 
 
-def test_get_converter_against_real_registry_currently_raises():
-    # CONVERTER_REGISTRY is empty until Phase 3 — the default-arg lookup
-    # path should behave identically to an explicit empty registry.
+def test_get_converter_against_real_registry_constructs_libreoffice_converter():
+    converter = get_converter("docx", "pdf")
+    assert isinstance(converter, LibreOfficeConverter)
+
+
+def test_get_converter_against_real_registry_unknown_pair_raises():
     with pytest.raises(UnknownConversionError):
-        get_converter("docx", "pdf")
+        get_converter("pdf", "docx")
