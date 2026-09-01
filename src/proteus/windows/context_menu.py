@@ -1,10 +1,19 @@
 """Windows Explorer right-click context menu — winreg install/uninstall.
 
-Static, per-pair verbs under
-HKCU\\Software\\Classes\\SystemFileAssociations\\.{ext}\\shell\\proteus_convert_to_{to_ext},
-derived from CONVERTER_REGISTRY. HKCU-only — no admin rights, no COM/DLL
-registration. Every key this installs is proteus_-prefixed so uninstall()
-removes exactly what install() created and nothing else.
+Everything nests under one "Proteus" cascading submenu per source
+extension, using the documented static-cascading-menu mechanism (no
+COM/DLL needed): a parent key with MUIVerb="Proteus" and SubCommands=""
+(the empty string is what tells Explorer "render this key's own \\shell
+children as a submenu" instead of treating the key as a leaf command).
+
+Key shape, derived from CONVERTER_REGISTRY:
+  HKCU\\Software\\Classes\\SystemFileAssociations\\.{from_ext}
+    \\shell\\proteus_menu                    (parent: MUIVerb, SubCommands)
+      \\shell\\proteus_convert_to_{to_ext}   (one per registered pair for that from_ext)
+        \\command
+
+HKCU-only — no admin rights. Every key this installs is proteus_-prefixed
+so uninstall() removes exactly what install() created and nothing else.
 """
 
 from __future__ import annotations
@@ -15,12 +24,18 @@ from pathlib import Path
 
 from proteus.core.registry import CONVERTER_REGISTRY
 
+MENU_KEY_NAME = "proteus_menu"
+MENU_DISPLAY_NAME = "Proteus"
 VERB_PREFIX = "proteus_convert_to_"
 CLASSES_ROOT = winreg.HKEY_CURRENT_USER
 
 
 def _verb_name(to_ext: str) -> str:
     return f"{VERB_PREFIX}{to_ext}"
+
+
+def _menu_key_path(from_ext: str) -> str:
+    return rf"Software\Classes\SystemFileAssociations\.{from_ext}\shell\{MENU_KEY_NAME}"
 
 
 def _proteus_exe_path() -> Path:
@@ -40,11 +55,17 @@ def _proteus_exe_path() -> Path:
 
 
 def install() -> list[str]:
-    """Install one right-click verb per registered conversion pair.
+    """Install one "Proteus" cascading submenu per source extension, with
+    one item inside it per registered conversion pair for that extension.
 
     Returns the "from -> to" pairs installed.
     """
     exe_path = _proteus_exe_path()
+
+    from_exts = sorted({from_ext for from_ext, _ in CONVERTER_REGISTRY})
+    for from_ext in from_exts:
+        _install_menu(from_ext)
+
     installed = []
     for from_ext, to_ext in sorted(CONVERTER_REGISTRY.keys()):
         _install_verb(exe_path, from_ext, to_ext)
@@ -52,9 +73,18 @@ def install() -> list[str]:
     return installed
 
 
+def _install_menu(from_ext: str) -> None:
+    with winreg.CreateKeyEx(CLASSES_ROOT, _menu_key_path(from_ext)) as key:
+        winreg.SetValueEx(key, "MUIVerb", 0, winreg.REG_SZ, MENU_DISPLAY_NAME)
+        # Empty string is the documented signal for a static cascading
+        # submenu — Explorer renders this key's \shell children as the
+        # submenu instead of expecting a COM handler.
+        winreg.SetValueEx(key, "SubCommands", 0, winreg.REG_SZ, "")
+
+
 def _install_verb(exe_path: Path, from_ext: str, to_ext: str) -> None:
     verb = _verb_name(to_ext)
-    shell_key_path = rf"Software\Classes\SystemFileAssociations\.{from_ext}\shell\{verb}"
+    shell_key_path = rf"{_menu_key_path(from_ext)}\shell\{verb}"
     command_key_path = rf"{shell_key_path}\command"
 
     with winreg.CreateKeyEx(CLASSES_ROOT, shell_key_path) as key:
@@ -66,18 +96,21 @@ def _install_verb(exe_path: Path, from_ext: str, to_ext: str) -> None:
 
 
 def uninstall() -> list[str]:
-    """Remove every proteus_-prefixed verb this installed.
+    """Remove every proteus-installed "Proteus" submenu (and everything
+    nested under it).
 
-    Safe to call even if nothing (or only some pairs) were installed —
-    missing keys are skipped, not an error. Returns the "from -> to"
-    pairs actually removed.
+    Safe to call even if nothing (or only some extensions) were
+    installed — missing keys are skipped, not an error. Returns the
+    "from -> to" pairs actually removed.
     """
     removed = []
-    for from_ext, to_ext in sorted(CONVERTER_REGISTRY.keys()):
-        verb = _verb_name(to_ext)
-        shell_key_path = rf"Software\Classes\SystemFileAssociations\.{from_ext}\shell\{verb}"
-        if _delete_key_tree(CLASSES_ROOT, shell_key_path):
-            removed.append(f"{from_ext} -> {to_ext}")
+    from_exts = sorted({from_ext for from_ext, _ in CONVERTER_REGISTRY})
+    for from_ext in from_exts:
+        pairs_for_ext = sorted(
+            to_ext for f_ext, to_ext in CONVERTER_REGISTRY if f_ext == from_ext
+        )
+        if _delete_key_tree(CLASSES_ROOT, _menu_key_path(from_ext)):
+            removed.extend(f"{from_ext} -> {to_ext}" for to_ext in pairs_for_ext)
     return removed
 
 

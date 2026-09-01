@@ -5,14 +5,22 @@ Unlike LibreOffice/Pandoc, these wrap Python libraries directly — no
 external binary, no subprocess boundary. Both libraries are hard
 dependencies (see pyproject.toml), not optional installs, so
 is_available() is simply True.
+
+pdf2docx/pymupdf are imported lazily, inside convert() rather than at
+module level: pdf2docx's own top-level `import fitz` prints a
+user-visible deprecation warning ("`fitz` API is deprecated ... use
+`import pymupdf` instead") at import time, and core/registry.py imports
+every converter module eagerly regardless of which pair is actually being
+run. A module-level import here meant that warning showed up on *every*
+Proteus invocation, including plain docx->pdf runs that never touch these
+libraries at all — confusing enough that it looked like docx->pdf itself
+was broken. Deferring the import means it only appears for pdf->docx /
+pdf->txt, the two pairs that actually need it.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-
-import pymupdf
-from pdf2docx import Converter as Pdf2DocxLibConverter
 
 from proteus.core.converter import (
     ConversionOptions,
@@ -33,6 +41,8 @@ class Pdf2DocxConverter(Converter):
     def convert(
         self, input_path: Path, output_path: Path, options: ConversionOptions
     ) -> ConversionResult:
+        from pdf2docx import Converter as Pdf2DocxLibConverter
+
         cv = None
         try:
             cv = Pdf2DocxLibConverter(str(input_path))
@@ -68,6 +78,8 @@ class PyMuPdfTextExtractConverter(Converter):
     ) -> ConversionResult:
         """Extract text via PyMuPDF (imported as `pymupdf` — the `fitz`
         alias is deprecated as of the pinned version)."""
+        import pymupdf
+
         try:
             with pymupdf.open(str(input_path)) as doc:
                 text = "\n".join(page.get_text() for page in doc)
