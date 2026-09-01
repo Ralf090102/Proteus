@@ -19,6 +19,8 @@ from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict
 
+from proteus.core.errors import ConversionFailedError
+
 
 class ConversionOptions(BaseModel):
     """Base class for per-conversion options.
@@ -37,6 +39,19 @@ class ConversionResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     output_path: Path
+
+
+def ensure_output_created(output_path: Path, backend_name: str) -> None:
+    """Raise ConversionFailedError if output_path wasn't actually created.
+
+    Shared final step for every converter's convert() — a backend
+    reporting success (subprocess exit 0, a library call returning
+    normally) doesn't guarantee it actually wrote the file.
+    """
+    if not output_path.exists():
+        raise ConversionFailedError(
+            f"{backend_name} reported success but {output_path} wasn't created"
+        )
 
 
 class Converter(ABC):

@@ -14,7 +14,12 @@ from pathlib import Path
 import pymupdf
 from pdf2docx import Converter as Pdf2DocxLibConverter
 
-from proteus.core.converter import ConversionOptions, ConversionResult, Converter
+from proteus.core.converter import (
+    ConversionOptions,
+    ConversionResult,
+    Converter,
+    ensure_output_created,
+)
 from proteus.core.errors import ConversionFailedError
 
 
@@ -28,23 +33,26 @@ class Pdf2DocxConverter(Converter):
     def convert(
         self, input_path: Path, output_path: Path, options: ConversionOptions
     ) -> ConversionResult:
+        cv = None
         try:
             cv = Pdf2DocxLibConverter(str(input_path))
-            try:
-                cv.convert(str(output_path))
-            finally:
-                cv.close()
+            cv.convert(str(output_path))
         except Exception as e:
             # pdf2docx has no stable typed-exception contract to catch
             # narrowly — any failure here must still surface as a
             # ProteusError, never a bare exception.
             raise ConversionFailedError(f"pdf2docx failed to convert {input_path}: {e}") from e
+        finally:
+            if cv is not None:
+                try:
+                    cv.close()
+                except Exception:
+                    # A close()-time failure shouldn't mask the real
+                    # convert() outcome above (or override a genuine
+                    # success) — cleanup is best-effort here.
+                    pass
 
-        if not output_path.exists():
-            raise ConversionFailedError(
-                f"pdf2docx reported success but {output_path} wasn't created"
-            )
-
+        ensure_output_created(output_path, "pdf2docx")
         return ConversionResult(output_path=output_path)
 
 
@@ -63,10 +71,10 @@ class PyMuPdfTextExtractConverter(Converter):
         try:
             with pymupdf.open(str(input_path)) as doc:
                 text = "\n".join(page.get_text() for page in doc)
+            output_path.write_text(text, encoding="utf-8")
         except Exception as e:
             raise ConversionFailedError(
                 f"PyMuPDF failed to extract text from {input_path}: {e}"
             ) from e
 
-        output_path.write_text(text, encoding="utf-8")
         return ConversionResult(output_path=output_path)

@@ -11,7 +11,12 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from proteus.core.converter import ConversionOptions, ConversionResult, Converter
+from proteus.core.converter import (
+    ConversionOptions,
+    ConversionResult,
+    Converter,
+    ensure_output_created,
+)
 from proteus.core.errors import ConversionFailedError, ConverterUnavailableError
 from proteus.core.subprocess_utils import isolated_libreoffice_profile, run_subprocess
 
@@ -54,10 +59,7 @@ class LibreOfficeConverter(Converter):
         # under profile-lock contention or on some malformed inputs — then
         # move it into place if that doesn't already match output_path.
         produced = output_path.parent / f"{input_path.stem}.pdf"
-        if not produced.exists():
-            raise ConversionFailedError(
-                f"LibreOffice reported success but {produced} wasn't created"
-            )
+        ensure_output_created(produced, "LibreOffice")
 
         if produced != output_path:
             try:

@@ -13,8 +13,13 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from proteus.core.converter import ConversionOptions, ConversionResult, Converter
-from proteus.core.errors import ConversionFailedError, ConverterUnavailableError
+from proteus.core.converter import (
+    ConversionOptions,
+    ConversionResult,
+    Converter,
+    ensure_output_created,
+)
+from proteus.core.errors import ConverterUnavailableError
 from proteus.core.subprocess_utils import run_subprocess
 
 PANDOC_BIN = "pandoc"
@@ -53,11 +58,7 @@ class _PandocConverterBase(Converter):
             ]
         )
 
-        if not output_path.exists():
-            raise ConversionFailedError(
-                f"pandoc reported success but {output_path} wasn't created"
-            )
-
+        ensure_output_created(output_path, "pandoc")
         return ConversionResult(output_path=output_path)
 
 

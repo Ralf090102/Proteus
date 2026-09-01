@@ -6,9 +6,10 @@ all conversion goes through local tools (Pandoc, LibreOffice) or in-process libr
 
 ## Status
 
-Scaffolding stage — the package skeleton exists but no converter backend is wired up yet.
-Follow the phased build order below; don't jump ahead (e.g. don't write the Windows context-menu
-code before a converter actually works end to end).
+All v1 conversion pairs are implemented and working end to end (`docx→pdf`, `docx↔md`,
+`md→pdf`, `pdf→docx`, `pdf→txt`). The Windows context-menu layer (`windows/context_menu.py`,
+`install-context-menu`/`uninstall-context-menu`) is not built yet — still following the
+phased build order below, don't jump ahead.
 
 ## Architecture
 
@@ -54,8 +55,13 @@ uv run pytest -m integration   # also exercises real Pandoc/LibreOffice — need
 
 - `src/` layout; package name is `proteus`, import root is `proteus`.
 - External tools (LibreOffice, Pandoc) are invoked as subprocesses, never vendored.
-- Every real converter needs a matching `tests/unit` test against a fake/double, plus an
-  opt-in `tests/integration` test against the real tool once that phase is reached.
+- Every real converter that shells out to an external tool (LibreOffice, Pandoc) needs a
+  matching `tests/unit` test against a fake/double (mocked `shutil.which`/`run_subprocess`),
+  plus an opt-in `tests/integration` test against the real tool once that phase is reached.
+  Exception: a converter wrapping a Python library that's a hard dependency (`pdf2docx`,
+  PyMuPDF) has no "might not be installed" uncertainty to mock around, so its `tests/unit`
+  tests run the real library directly against a fixture — no fake/double, no separate
+  `integration`-marked duplicate of the same real test.
 - Test fixtures (`tests/fixtures/`) are small, committed sample files (a `.docx` with a
   heading/list/table, a `.md` with heading/code-fence/table, a short `.pdf`) — not generated
   at test time.
