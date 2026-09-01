@@ -116,3 +116,27 @@ def test_markdown_to_pdf_chain_availability_reflects_both_steps(monkeypatch):
 
 def test_markdown_to_pdf_chain_steps_are_pandoc_then_libreoffice():
     assert MarkdownToPdfChainConverter.steps == (MarkdownToDocxConverter, LibreOfficeConverter)
+
+
+def test_markdown_to_pdf_chain_tool_checks_surfaces_both_steps(monkeypatch):
+    # Regression target for `proteus doctor`: a chain's tool_checks() must
+    # expose *each* underlying tool individually (not just an aggregate
+    # bool) so an unavailable md->pdf tells you whether Pandoc or
+    # LibreOffice (or both) is the actual problem.
+    from proteus.converters import libreoffice as libreoffice_module
+    from proteus.converters import pandoc as pandoc_module
+    from proteus.core.converter import ToolCheck
+    from proteus.core.dependencies import AvailabilityStatus
+
+    pandoc_status = AvailabilityStatus(True, Path("/usr/bin/pandoc"), "path")
+    soffice_status = AvailabilityStatus(False, None, "not-found")
+
+    monkeypatch.setattr(pandoc_module, "find_tool", lambda *a, **k: pandoc_status)
+    monkeypatch.setattr(libreoffice_module, "find_tool", lambda *a, **k: soffice_status)
+
+    checks = MarkdownToPdfChainConverter().tool_checks()
+
+    assert checks == (
+        ToolCheck(pandoc_module.PANDOC_BIN, pandoc_status),
+        ToolCheck(libreoffice_module.SOFFICE_BIN, soffice_status),
+    )

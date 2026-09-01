@@ -21,7 +21,8 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from proteus.core.converter import ConversionOptions
+from proteus.core.converter import ConversionOptions, ToolCheck
+from proteus.core.dependencies import INSTALL_LINKS
 from proteus.core.errors import ProteusError
 from proteus.core.registry import CONVERTER_REGISTRY, get_converter
 from proteus.windows import context_menu
@@ -149,11 +150,57 @@ def doctor() -> None:
     table.add_column("Pair")
     table.add_column("Converter")
     table.add_column("Available")
+    table.add_column("Details")
+
+    # Install links get printed separately below the table, not squeezed
+    # into a table cell — a long URL truncates with a "…" inside a narrow
+    # table column (confirmed: rich's default 80-col fallback width cuts
+    # every LibreOffice/Pandoc download link short), which would defeat
+    # the whole point of showing it. dict, not set, to preserve first-seen
+    # order without duplicates (a tool missing for multiple pairs, e.g.
+    # soffice for both docx->pdf and the md->pdf chain, is only listed once).
+    missing_tools: dict[str, None] = {}
+
     for (from_ext, to_ext), converter_class in sorted(CONVERTER_REGISTRY.items()):
-        available = converter_class().is_available()
+        converter = converter_class()
+        checks = converter.tool_checks()
+        available = converter.is_available()
         status = "[green]yes[/green]" if available else "[red]no[/red]"
-        table.add_row(f"{from_ext} -> {to_ext}", converter_class.__name__, status)
+        table.add_row(
+            f"{from_ext} -> {to_ext}",
+            converter_class.__name__,
+            status,
+            _doctor_details(checks, missing_tools),
+        )
     console.print(table)
+
+    if missing_tools:
+        console.print()
+        console.print("[bold yellow]Install missing tools:[/bold yellow]")
+        for bin_name in missing_tools:
+            link = INSTALL_LINKS.get(bin_name)
+            line = f"  {bin_name}"
+            if link:
+                line += f" — {link}"
+            console.print(escape(line))
+
+
+def _doctor_details(checks: tuple[ToolCheck, ...], missing_tools: dict[str, None]) -> str:
+    """Build doctor's Details cell for one converter: where each required
+    tool was found, or a short "not found" flag — the full install link
+    for anything missing goes in the separate list doctor() prints below
+    the table instead (see there for why)."""
+    if not checks:
+        return "bundled Python library — no external tool needed"
+
+    parts = []
+    for bin_name, status in checks:
+        if status.available:
+            parts.append(f"{bin_name}: {status.path}")
+        else:
+            parts.append(f"{bin_name}: not found")
+            missing_tools.setdefault(bin_name, None)
+    return escape(" | ".join(parts))
 
 
 @app.command(name="install-context-menu")

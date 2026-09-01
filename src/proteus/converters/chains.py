@@ -15,7 +15,7 @@ from typing import ClassVar
 
 from proteus.converters.libreoffice import LibreOfficeConverter
 from proteus.converters.pandoc import MarkdownToDocxConverter
-from proteus.core.converter import ConversionOptions, ConversionResult, Converter
+from proteus.core.converter import ConversionOptions, ConversionResult, Converter, ToolCheck
 
 
 class ChainConverter(Converter):
@@ -27,6 +27,14 @@ class ChainConverter(Converter):
 
     def is_available(self) -> bool:
         return all(step_class().is_available() for step_class in self.steps)
+
+    def tool_checks(self) -> tuple[ToolCheck, ...]:
+        # Surfaces every step's tools individually (e.g. both Pandoc and
+        # LibreOffice for md->pdf) so `doctor` can say *which* underlying
+        # backend is missing, not just that the chain as a whole is not.
+        return tuple(
+            check for step_class in self.steps for check in step_class().tool_checks()
+        )
 
     def convert(
         self, input_path: Path, output_path: Path, options: ConversionOptions

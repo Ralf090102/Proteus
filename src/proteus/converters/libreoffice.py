@@ -16,6 +16,7 @@ from proteus.core.converter import (
     ConversionOptions,
     ConversionResult,
     Converter,
+    ToolCheck,
     ensure_output_created,
 )
 from proteus.core.dependencies import find_tool
@@ -32,6 +33,9 @@ class LibreOfficeConverter(Converter):
 
     def is_available(self) -> bool:
         return find_tool(SOFFICE_BIN, env_var=SOFFICE_ENV_VAR).available
+
+    def tool_checks(self) -> tuple[ToolCheck, ...]:
+        return (ToolCheck(SOFFICE_BIN, find_tool(SOFFICE_BIN, env_var=SOFFICE_ENV_VAR)),)
 
     def convert(
         self, input_path: Path, output_path: Path, options: ConversionOptions

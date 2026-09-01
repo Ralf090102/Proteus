@@ -3,6 +3,8 @@ conversion fidelity (that's the manual check / integration test)."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from typer.testing import CliRunner
 
@@ -30,6 +32,117 @@ def test_doctor_runs_successfully():
     assert "md -> pdf" in result.stdout
     assert "pdf -> docx" in result.stdout
     assert "pdf -> txt" in result.stdout
+
+
+def test_doctor_shows_details_column_and_bundled_note_for_library_backed_pairs():
+    # pdf->docx / pdf->txt wrap hard Python dependencies with no external
+    # tool at all — doctor must say so rather than leaving Details blank.
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    output_no_wrap = result.stdout.replace("\n", "")
+    assert "Details" in output_no_wrap
+    assert "bundled" in output_no_wrap
+
+
+def test_doctor_shows_resolved_path_for_an_available_tool_backed_converter(monkeypatch):
+    from proteus.converters import libreoffice as libreoffice_module
+    from proteus.core.dependencies import AvailabilityStatus
+
+    resolved = Path("known-location") / "soffice"
+    monkeypatch.setattr(
+        libreoffice_module,
+        "find_tool",
+        lambda *a, **k: AvailabilityStatus(True, resolved, "known-location"),
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    # Table cells can line-wrap under CliRunner's default width — collapse
+    # newlines before checking for the (long-ish) path substring.
+    assert str(resolved) in result.stdout.replace("\n", "")
+
+
+def test_doctor_shows_install_link_when_a_tool_backed_converter_is_missing(monkeypatch):
+    # Regression: a long install URL truncates with "…" if squeezed into a
+    # narrow table cell (confirmed under CliRunner's 80-col default) — it
+    # must appear in full, in the separate list doctor() prints below the
+    # table, not inside the table itself.
+    from proteus.converters import libreoffice as libreoffice_module
+    from proteus.core.dependencies import AvailabilityStatus
+
+    monkeypatch.setattr(
+        libreoffice_module,
+        "find_tool",
+        lambda *a, **k: AvailabilityStatus(False, None, "not-found"),
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    output_no_wrap = result.stdout.replace("\n", "")
+    assert "soffice: not found" in output_no_wrap
+    assert "Install missing tools" in output_no_wrap
+    assert "https://www.libreoffice.org/download/download-libreoffice/" in output_no_wrap
+
+
+def test_doctor_lists_each_missing_tool_only_once_across_multiple_pairs(monkeypatch):
+    # soffice backs both docx->pdf and (as one half of) the md->pdf chain —
+    # the install-link list must not repeat it.
+    from proteus.converters import libreoffice as libreoffice_module
+    from proteus.core.dependencies import AvailabilityStatus
+
+    monkeypatch.setattr(
+        libreoffice_module,
+        "find_tool",
+        lambda *a, **k: AvailabilityStatus(False, None, "not-found"),
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert result.stdout.count("libreoffice.org") == 1
+
+
+def test_doctor_chain_pair_details_surfaces_both_underlying_tools(monkeypatch):
+    # md->pdf is a ChainConverter over Pandoc + LibreOffice — doctor's
+    # Details column must show both, not collapse to one bool.
+    from proteus.converters import libreoffice as libreoffice_module
+    from proteus.converters import pandoc as pandoc_module
+    from proteus.core.dependencies import AvailabilityStatus
+
+    monkeypatch.setattr(
+        pandoc_module,
+        "find_tool",
+        lambda *a, **k: AvailabilityStatus(True, Path("/usr/bin/pandoc"), "path"),
+    )
+    monkeypatch.setattr(
+        libreoffice_module,
+        "find_tool",
+        lambda *a, **k: AvailabilityStatus(False, None, "not-found"),
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    output_no_wrap = result.stdout.replace("\n", "")
+    assert "pandoc:" in output_no_wrap
+    assert "soffice: not found" in output_no_wrap
+
+
+def test_doctor_prints_no_install_links_section_when_everything_available(monkeypatch):
+    from proteus.converters import libreoffice as libreoffice_module
+    from proteus.converters import pandoc as pandoc_module
+    from proteus.core.dependencies import AvailabilityStatus
+
+    available = AvailabilityStatus(True, Path("/usr/bin/tool"), "path")
+    monkeypatch.setattr(pandoc_module, "find_tool", lambda *a, **k: available)
+    monkeypatch.setattr(libreoffice_module, "find_tool", lambda *a, **k: available)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "Install missing tools" not in result.stdout
 
 
 def test_convert_unregistered_pair_exits_nonzero(tmp_path):

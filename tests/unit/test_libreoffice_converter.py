@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 from proteus.converters import libreoffice as libreoffice_module
-from proteus.converters.libreoffice import LibreOfficeConverter
-from proteus.core.converter import ConversionOptions
+from proteus.converters.libreoffice import SOFFICE_BIN, LibreOfficeConverter
+from proteus.core.converter import ConversionOptions, ToolCheck
 from proteus.core.dependencies import AvailabilityStatus
 from proteus.core.errors import ConversionFailedError, ConverterUnavailableError
 
@@ -30,6 +30,12 @@ def test_is_available_reflects_find_tool(monkeypatch):
 
     monkeypatch.setattr(libreoffice_module, "find_tool", lambda *a, **k: _unavailable())
     assert LibreOfficeConverter().is_available() is False
+
+
+def test_tool_checks_reflects_find_tool(monkeypatch):
+    status = _available(Path("/opt/known-location/soffice"))
+    monkeypatch.setattr(libreoffice_module, "find_tool", lambda *a, **k: status)
+    assert LibreOfficeConverter().tool_checks() == (ToolCheck(SOFFICE_BIN, status),)
 
 
 def test_convert_raises_converter_unavailable_when_soffice_missing(monkeypatch, tmp_path):

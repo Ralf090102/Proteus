@@ -15,10 +15,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, NamedTuple
 
 from pydantic import BaseModel, ConfigDict
 
+from proteus.core.dependencies import AvailabilityStatus
 from proteus.core.errors import ConversionFailedError
 
 
@@ -54,6 +55,14 @@ def ensure_output_created(output_path: Path, backend_name: str) -> None:
         )
 
 
+class ToolCheck(NamedTuple):
+    """One external tool a converter depends on, paired with its resolved
+    find_tool() status — e.g. ("soffice", AvailabilityStatus(...))."""
+
+    bin_name: str
+    status: AvailabilityStatus
+
+
 class Converter(ABC):
     """Base contract for a single (from_ext, to_ext) conversion pair."""
 
@@ -67,6 +76,16 @@ class Converter(ABC):
         and callers checking before a real conversion use this — see
         ConverterUnavailableError in core/errors.py."""
         raise NotImplementedError
+
+    def tool_checks(self) -> tuple[ToolCheck, ...]:
+        """External tool(s) this converter depends on, each already
+        resolved via find_tool(). Empty for a converter with no external
+        dependency (e.g. one wrapping a hard Python library that's always
+        available) — the default here, so no existing converter is forced
+        to override it. `proteus doctor` uses this to explain *why* an
+        unavailable converter is unavailable (and how to fix it) without
+        needing to know anything converter-specific itself."""
+        return ()
 
     @abstractmethod
     def convert(

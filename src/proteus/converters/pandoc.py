@@ -16,6 +16,7 @@ from proteus.core.converter import (
     ConversionOptions,
     ConversionResult,
     Converter,
+    ToolCheck,
     ensure_output_created,
 )
 from proteus.core.dependencies import find_tool
@@ -36,6 +37,9 @@ class _PandocConverterBase(Converter):
 
     def is_available(self) -> bool:
         return find_tool(PANDOC_BIN, env_var=PANDOC_ENV_VAR).available
+
+    def tool_checks(self) -> tuple[ToolCheck, ...]:
+        return (ToolCheck(PANDOC_BIN, find_tool(PANDOC_BIN, env_var=PANDOC_ENV_VAR)),)
 
     def convert(
         self, input_path: Path, output_path: Path, options: ConversionOptions

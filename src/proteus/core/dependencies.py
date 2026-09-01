@@ -44,6 +44,14 @@ KNOWN_INSTALL_PATHS: dict[str, tuple[Path, ...]] = {
     "proteus-gui": (Path.home() / ".local" / "bin" / "proteus-gui.exe",),
 }
 
+# Hand-maintained alongside KNOWN_INSTALL_PATHS, for the same reason — used
+# by `proteus doctor` (via Converter.tool_checks(), see core/converter.py)
+# to point at where to get a missing tool instead of just saying "no."
+INSTALL_LINKS: dict[str, str] = {
+    "soffice": "https://www.libreoffice.org/download/download-libreoffice/",
+    "pandoc": "https://pandoc.org/installing.html",
+}
+
 
 def find_tool(bin_name: str, *, env_var: str | None = None) -> AvailabilityStatus:
     """Locate bin_name, trying an explicit override before falling back to

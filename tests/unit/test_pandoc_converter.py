@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 from proteus.converters import pandoc as pandoc_module
-from proteus.converters.pandoc import DocxToMarkdownConverter, MarkdownToDocxConverter
-from proteus.core.converter import ConversionOptions
+from proteus.converters.pandoc import PANDOC_BIN, DocxToMarkdownConverter, MarkdownToDocxConverter
+from proteus.core.converter import ConversionOptions, ToolCheck
 from proteus.core.dependencies import AvailabilityStatus
 from proteus.core.errors import ConversionFailedError, ConverterUnavailableError
 
@@ -30,6 +30,12 @@ def test_is_available_reflects_find_tool(monkeypatch):
 
     monkeypatch.setattr(pandoc_module, "find_tool", lambda *a, **k: _unavailable())
     assert DocxToMarkdownConverter().is_available() is False
+
+
+def test_tool_checks_reflects_find_tool(monkeypatch):
+    status = _available(Path("/opt/known-location/pandoc"))
+    monkeypatch.setattr(pandoc_module, "find_tool", lambda *a, **k: status)
+    assert DocxToMarkdownConverter().tool_checks() == (ToolCheck(PANDOC_BIN, status),)
 
 
 def test_convert_raises_converter_unavailable_when_pandoc_missing(monkeypatch, tmp_path):
