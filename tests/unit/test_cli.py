@@ -86,3 +86,90 @@ def test_convert_reports_proteus_error_with_bracket_like_text_without_crashing(
     assert isinstance(result.exception, SystemExit)
     assert result.exit_code == 1
     assert "[/nope]" in result.output
+
+
+def test_install_context_menu_reports_installed_pairs(monkeypatch):
+    monkeypatch.setattr(cli_module.context_menu, "install", lambda: ["docx -> pdf", "md -> pdf"])
+    result = runner.invoke(app, ["install-context-menu"])
+    assert result.exit_code == 0
+    assert "docx -> pdf" in result.stdout
+    assert "md -> pdf" in result.stdout
+
+
+def test_install_context_menu_reports_missing_proteus_on_path_cleanly(monkeypatch):
+    def raise_runtime_error():
+        raise RuntimeError("proteus isn't on PATH. Run `uv tool install .` first.")
+
+    monkeypatch.setattr(cli_module.context_menu, "install", raise_runtime_error)
+    result = runner.invoke(app, ["install-context-menu"])
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "uv tool install" in result.output
+
+
+def test_uninstall_context_menu_reports_removed_pairs(monkeypatch):
+    monkeypatch.setattr(cli_module.context_menu, "uninstall", lambda: ["docx -> pdf"])
+    result = runner.invoke(app, ["uninstall-context-menu"])
+    assert result.exit_code == 0
+    assert "docx -> pdf" in result.stdout
+
+
+def test_uninstall_context_menu_reports_nothing_installed(monkeypatch):
+    monkeypatch.setattr(cli_module.context_menu, "uninstall", lambda: [])
+    result = runner.invoke(app, ["uninstall-context-menu"])
+    assert result.exit_code == 0
+    assert "No proteus context-menu entries" in result.stdout
+
+
+def test_convert_from_context_menu_success_reveals_in_explorer_not_console(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(cli_module.subprocess, "Popen", lambda cmd: calls.append(cmd))
+
+    input_file = tmp_path / "in.docx"
+    input_file.write_text("placeholder")
+    output_path = tmp_path / "in.pdf"
+
+    class _FakeConverter:
+        def convert(self, input_path, out_path, options):
+            from proteus.core.converter import ConversionResult
+
+            output_path.write_bytes(b"%PDF-fake")
+            return ConversionResult(output_path=output_path)
+
+    monkeypatch.setattr(cli_module, "get_converter", lambda *a, **k: _FakeConverter())
+
+    result = runner.invoke(
+        app, ["convert", str(input_file), "--to", "pdf", "--from-context-menu"]
+    )
+
+    assert result.exit_code == 0
+    assert result.output == ""  # no console output attempted in this mode
+    assert len(calls) == 1
+    assert calls[0][0] == "explorer"
+    assert calls[0][1] == f"/select,{output_path}"
+
+
+def test_convert_from_context_menu_failure_shows_message_box_not_console(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        cli_module.ctypes.windll.user32,
+        "MessageBoxW",
+        lambda *args: calls.append(args),
+    )
+
+    def raise_conversion_failed(*args, **kwargs):
+        raise ConversionFailedError("boom")
+
+    monkeypatch.setattr(cli_module, "get_converter", raise_conversion_failed)
+
+    input_file = tmp_path / "in.docx"
+    input_file.write_text("placeholder")
+
+    result = runner.invoke(
+        app, ["convert", str(input_file), "--to", "pdf", "--from-context-menu"]
+    )
+
+    assert result.exit_code == 1
+    assert result.output == ""  # no console output attempted in this mode
+    assert len(calls) == 1
+    assert "boom" in calls[0][1]

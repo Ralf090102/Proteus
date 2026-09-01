@@ -46,6 +46,11 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+# _FakeWinreg's method names deliberately mirror the real winreg module's
+# API (CreateKeyEx, SetValueEx, ...) so it can stand in for it in tests.
+"tests/unit/test_context_menu.py" = ["N802"]
+
 [tool.pytest.ini_options]
 markers = [
     "integration: requires real Pandoc/LibreOffice on PATH (opt-in, `pytest -m integration`)",

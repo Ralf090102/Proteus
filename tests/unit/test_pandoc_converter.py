@@ -1,33 +1,47 @@
-"""Unit tests for the Pandoc-backed converters — shutil.which and
+"""Unit tests for the Pandoc-backed converters — find_tool and
 run_subprocess are mocked, so no real Pandoc install is needed."""
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 
 from proteus.converters import pandoc as pandoc_module
 from proteus.converters.pandoc import DocxToMarkdownConverter, MarkdownToDocxConverter
 from proteus.core.converter import ConversionOptions
+from proteus.core.dependencies import AvailabilityStatus
 from proteus.core.errors import ConversionFailedError, ConverterUnavailableError
 
+_PANDOC_PATH = Path("/usr/bin/pandoc")
 
-def test_is_available_reflects_which(monkeypatch):
-    monkeypatch.setattr(pandoc_module.shutil, "which", lambda _: "/usr/bin/pandoc")
+
+def _available(path: Path = _PANDOC_PATH) -> AvailabilityStatus:
+    return AvailabilityStatus(True, path, "path")
+
+
+def _unavailable() -> AvailabilityStatus:
+    return AvailabilityStatus(False, None, "not-found")
+
+
+def test_is_available_reflects_find_tool(monkeypatch):
+    monkeypatch.setattr(pandoc_module, "find_tool", lambda *a, **k: _available())
     assert DocxToMarkdownConverter().is_available() is True
 
-    monkeypatch.setattr(pandoc_module.shutil, "which", lambda _: None)
+    monkeypatch.setattr(pandoc_module, "find_tool", lambda *a, **k: _unavailable())
     assert DocxToMarkdownConverter().is_available() is False
 
 
 def test_convert_raises_converter_unavailable_when_pandoc_missing(monkeypatch, tmp_path):
-    monkeypatch.setattr(pandoc_module.shutil, "which", lambda _: None)
+    monkeypatch.setattr(pandoc_module, "find_tool", lambda *a, **k: _unavailable())
     converter = DocxToMarkdownConverter()
     with pytest.raises(ConverterUnavailableError):
         converter.convert(tmp_path / "in.docx", tmp_path / "out.md", ConversionOptions())
 
 
-def test_docx_to_markdown_invokes_pandoc_with_correct_formats(monkeypatch, tmp_path):
-    monkeypatch.setattr(pandoc_module.shutil, "which", lambda _: "/usr/bin/pandoc")
+def test_docx_to_markdown_invokes_resolved_pandoc_path_with_correct_formats(monkeypatch, tmp_path):
+    resolved_path = tmp_path / "known-location" / "pandoc.exe"
+    monkeypatch.setattr(pandoc_module, "find_tool", lambda *a, **k: _available(resolved_path))
 
     input_path = tmp_path / "in.docx"
     input_path.write_text("placeholder")
@@ -45,7 +59,9 @@ def test_docx_to_markdown_invokes_pandoc_with_correct_formats(monkeypatch, tmp_p
 
     assert result.output_path == output_path
     cmd = captured_cmd["cmd"]
-    assert cmd[0] == "pandoc"
+    # Regression: the resolved path from find_tool() is what gets
+    # invoked, not the bare "pandoc" name.
+    assert cmd[0] == str(resolved_path)
     assert "-f" in cmd and cmd[cmd.index("-f") + 1] == "docx"
     assert "-t" in cmd and cmd[cmd.index("-t") + 1] == "gfm"
     assert str(output_path) in cmd
@@ -53,7 +69,7 @@ def test_docx_to_markdown_invokes_pandoc_with_correct_formats(monkeypatch, tmp_p
 
 
 def test_markdown_to_docx_invokes_pandoc_with_correct_formats(monkeypatch, tmp_path):
-    monkeypatch.setattr(pandoc_module.shutil, "which", lambda _: "/usr/bin/pandoc")
+    monkeypatch.setattr(pandoc_module, "find_tool", lambda *a, **k: _available())
 
     input_path = tmp_path / "in.md"
     input_path.write_text("# placeholder")
@@ -76,7 +92,7 @@ def test_markdown_to_docx_invokes_pandoc_with_correct_formats(monkeypatch, tmp_p
 
 
 def test_convert_raises_conversion_failed_if_output_missing(monkeypatch, tmp_path):
-    monkeypatch.setattr(pandoc_module.shutil, "which", lambda _: "/usr/bin/pandoc")
+    monkeypatch.setattr(pandoc_module, "find_tool", lambda *a, **k: _available())
     monkeypatch.setattr(pandoc_module, "run_subprocess", lambda cmd, **kwargs: None)
 
     input_path = tmp_path / "in.docx"

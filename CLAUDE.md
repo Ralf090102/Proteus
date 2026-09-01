@@ -6,10 +6,10 @@ all conversion goes through local tools (Pandoc, LibreOffice) or in-process libr
 
 ## Status
 
-All v1 conversion pairs are implemented and working end to end (`docx→pdf`, `docx↔md`,
-`md→pdf`, `pdf→docx`, `pdf→txt`). The Windows context-menu layer (`windows/context_menu.py`,
-`install-context-menu`/`uninstall-context-menu`) is not built yet — still following the
-phased build order below, don't jump ahead.
+All v1 conversion pairs work end to end (`docx→pdf`, `docx↔md`, `md→pdf`, `pdf→docx`,
+`pdf→txt`), and the Windows right-click context-menu layer (`windows/context_menu.py`,
+`install-context-menu`/`uninstall-context-menu`) is built and installable. Remaining: Phase 7
+polish (richer `doctor` output, install-links for missing tools, packaging notes).
 
 ## Architecture
 
@@ -22,11 +22,17 @@ pair is a small `Converter` implementation registered under a `(from_ext, to_ext
   (pydantic models).
 - `core/errors.py` — `ProteusError` and its subclasses (`UnknownConversionError`,
   `ConverterUnavailableError`, `ConversionFailedError`).
+- `core/dependencies.py` — `find_tool()`: env var override → `shutil.which()` → known Windows
+  install paths → not found. Every subprocess-backed converter resolves its binary through
+  this (not a bare `shutil.which()` call), so `is_available()` and the actual command it runs
+  always agree — installers don't reliably add themselves to PATH (confirmed for real with
+  both LibreOffice and Pandoc during development).
 - `converters/` — one module per backend (`libreoffice.py`, `pandoc.py`, `pdf_extract.py`,
   `chains.py` for composite conversions like `md → pdf`).
 - `windows/context_menu.py` — `winreg`-based install/uninstall of static right-click verbs
-  under `HKCU\Software\Classes\SystemFileAssociations\.{ext}\shell\...`, derived from the
-  registry. No COM/DLL — HKCU-only, no admin rights needed.
+  under `HKCU\Software\Classes\SystemFileAssociations\.{ext}\shell\proteus_convert_to_{ext}`,
+  derived from the registry. No COM/DLL — HKCU-only, no admin rights needed. All keys
+  `proteus_`-prefixed so uninstall removes exactly what install created.
 - `cli.py` — the Typer app (`proteus convert`, `list-formats`, `doctor`,
   `install-context-menu` / `uninstall-context-menu`).
 

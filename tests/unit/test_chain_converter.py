@@ -101,12 +101,16 @@ def test_chain_propagates_a_mid_chain_step_failure(tmp_path):
 def test_markdown_to_pdf_chain_availability_reflects_both_steps(monkeypatch):
     from proteus.converters import libreoffice as libreoffice_module
     from proteus.converters import pandoc as pandoc_module
+    from proteus.core.dependencies import AvailabilityStatus
 
-    monkeypatch.setattr(pandoc_module.shutil, "which", lambda _: "/usr/bin/pandoc")
-    monkeypatch.setattr(libreoffice_module.shutil, "which", lambda _: "/usr/bin/soffice")
+    available = AvailabilityStatus(True, Path("/usr/bin/tool"), "path")
+    unavailable = AvailabilityStatus(False, None, "not-found")
+
+    monkeypatch.setattr(pandoc_module, "find_tool", lambda *a, **k: available)
+    monkeypatch.setattr(libreoffice_module, "find_tool", lambda *a, **k: available)
     assert MarkdownToPdfChainConverter().is_available() is True
 
-    monkeypatch.setattr(libreoffice_module.shutil, "which", lambda _: None)
+    monkeypatch.setattr(libreoffice_module, "find_tool", lambda *a, **k: unavailable)
     assert MarkdownToPdfChainConverter().is_available() is False
 
 

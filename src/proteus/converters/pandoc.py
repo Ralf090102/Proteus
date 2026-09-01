@@ -10,7 +10,6 @@ pair and which Pandoc format names they are.
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 from proteus.core.converter import (
@@ -19,10 +18,12 @@ from proteus.core.converter import (
     Converter,
     ensure_output_created,
 )
+from proteus.core.dependencies import find_tool
 from proteus.core.errors import ConverterUnavailableError
 from proteus.core.subprocess_utils import run_subprocess
 
 PANDOC_BIN = "pandoc"
+PANDOC_ENV_VAR = "PROTEUS_PANDOC_PATH"
 
 
 class _PandocConverterBase(Converter):
@@ -34,20 +35,21 @@ class _PandocConverterBase(Converter):
     pandoc_to_format: str
 
     def is_available(self) -> bool:
-        return shutil.which(PANDOC_BIN) is not None
+        return find_tool(PANDOC_BIN, env_var=PANDOC_ENV_VAR).available
 
     def convert(
         self, input_path: Path, output_path: Path, options: ConversionOptions
     ) -> ConversionResult:
-        if not self.is_available():
+        status = find_tool(PANDOC_BIN, env_var=PANDOC_ENV_VAR)
+        if not status.available:
             raise ConverterUnavailableError(
-                f"Pandoc ({PANDOC_BIN}) not found on PATH. Install it to convert "
+                f"Pandoc ({PANDOC_BIN}) not found. Install it to convert "
                 f"{self.from_ext}->{self.to_ext}."
             )
 
         run_subprocess(
             [
-                PANDOC_BIN,
+                str(status.path),
                 "-f",
                 self.pandoc_from_format,
                 "-t",

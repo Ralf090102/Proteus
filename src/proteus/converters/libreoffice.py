@@ -8,7 +8,6 @@ contention if multiple calls happen back to back.
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 from proteus.core.converter import (
@@ -17,10 +16,12 @@ from proteus.core.converter import (
     Converter,
     ensure_output_created,
 )
+from proteus.core.dependencies import find_tool
 from proteus.core.errors import ConversionFailedError, ConverterUnavailableError
 from proteus.core.subprocess_utils import isolated_libreoffice_profile, run_subprocess
 
 SOFFICE_BIN = "soffice"
+SOFFICE_ENV_VAR = "PROTEUS_SOFFICE_PATH"
 
 
 class LibreOfficeConverter(Converter):
@@ -28,21 +29,22 @@ class LibreOfficeConverter(Converter):
     to_ext = "pdf"
 
     def is_available(self) -> bool:
-        return shutil.which(SOFFICE_BIN) is not None
+        return find_tool(SOFFICE_BIN, env_var=SOFFICE_ENV_VAR).available
 
     def convert(
         self, input_path: Path, output_path: Path, options: ConversionOptions
     ) -> ConversionResult:
-        if not self.is_available():
+        status = find_tool(SOFFICE_BIN, env_var=SOFFICE_ENV_VAR)
+        if not status.available:
             raise ConverterUnavailableError(
-                f"LibreOffice ({SOFFICE_BIN}) not found on PATH. Install it to convert "
+                f"LibreOffice ({SOFFICE_BIN}) not found. Install it to convert "
                 f"{self.from_ext}->{self.to_ext}."
             )
 
         with isolated_libreoffice_profile() as profile_arg:
             run_subprocess(
                 [
-                    SOFFICE_BIN,
+                    str(status.path),
                     "--headless",
                     profile_arg,
                     "--convert-to",
