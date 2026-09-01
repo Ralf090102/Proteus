@@ -4,13 +4,27 @@ from __future__ import annotations
 
 import pytest
 
+from proteus.converters.chains import MarkdownToPdfChainConverter
 from proteus.converters.libreoffice import LibreOfficeConverter
+from proteus.converters.pandoc import DocxToMarkdownConverter, MarkdownToDocxConverter
 from proteus.core.errors import UnknownConversionError
 from proteus.core.registry import CONVERTER_REGISTRY, get_converter
 
 
 def test_docx_to_pdf_registered_to_libreoffice_converter():
     assert CONVERTER_REGISTRY[("docx", "pdf")] is LibreOfficeConverter
+
+
+def test_docx_to_md_registered_to_pandoc_converter():
+    assert CONVERTER_REGISTRY[("docx", "md")] is DocxToMarkdownConverter
+
+
+def test_md_to_docx_registered_to_pandoc_converter():
+    assert CONVERTER_REGISTRY[("md", "docx")] is MarkdownToDocxConverter
+
+
+def test_md_to_pdf_registered_to_chain_converter():
+    assert CONVERTER_REGISTRY[("md", "pdf")] is MarkdownToPdfChainConverter
 
 
 def test_get_converter_known_pair_constructs_instance(fake_converter):

@@ -12,17 +12,21 @@ from proteus.core.errors import ConversionFailedError
 runner = CliRunner()
 
 
-def test_list_formats_shows_docx_to_pdf():
+def test_list_formats_shows_all_registered_pairs():
     result = runner.invoke(app, ["list-formats"])
     assert result.exit_code == 0
     assert "docx" in result.stdout
     assert "pdf" in result.stdout
+    assert "md" in result.stdout
 
 
 def test_doctor_runs_successfully():
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     assert "docx -> pdf" in result.stdout
+    assert "docx -> md" in result.stdout
+    assert "md -> docx" in result.stdout
+    assert "md -> pdf" in result.stdout
 
 
 def test_convert_unregistered_pair_exits_nonzero(tmp_path):
