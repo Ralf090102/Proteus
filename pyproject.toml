@@ -25,6 +25,12 @@ email = "ralf.hernandez090102@gmail.com"
 [project.scripts]
 proteus = "proteus.cli:main"
 
+[project.gui-scripts]
+# Same entry point, windowed subsystem — used only for context-menu-launched
+# conversions (see windows/context_menu.py) so Explorer doesn't flash a
+# console window. Direct terminal use always goes through `proteus` above.
+proteus-gui = "proteus.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8",

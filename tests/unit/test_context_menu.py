@@ -5,6 +5,8 @@ Verifies the nested "Proteus" cascading-submenu structure:
   .{from_ext}\\shell\\proteus_menu                                  (parent: MUIVerb/SubCommands)
     \\shell\\proteus_convert_to_{to_ext}                              (one per registered pair)
       \\command
+    \\shell\\proteus_convert_to_{to_ext}_replace                     (same pair, --replace-source)
+      \\command
 """
 
 from __future__ import annotations
@@ -92,7 +94,10 @@ def fake_winreg(monkeypatch):
 
 @pytest.fixture
 def fake_proteus_exe(monkeypatch, tmp_path):
-    exe_path = tmp_path / "proteus.exe"
+    # Every installed verb's Command resolves through _proteus_gui_exe_path()
+    # only (see context_menu.install()) — find_tool() is mocked wholesale
+    # here since it's the only exe path context_menu.py resolves at all.
+    exe_path = tmp_path / "proteus-gui.exe"
     exe_path.write_text("placeholder")
     monkeypatch.setattr(
         context_menu_module,
@@ -102,14 +107,14 @@ def fake_proteus_exe(monkeypatch, tmp_path):
     return exe_path
 
 
-def test_proteus_exe_path_raises_when_not_found(monkeypatch):
+def test_proteus_gui_exe_path_raises_when_not_found(monkeypatch):
     monkeypatch.setattr(
         context_menu_module,
         "find_tool",
         lambda *a, **k: AvailabilityStatus(False, None, "not-found"),
     )
     with pytest.raises(RuntimeError, match="uv tool install"):
-        context_menu_module._proteus_exe_path()
+        context_menu_module._proteus_gui_exe_path()
 
 
 def test_install_creates_a_parent_menu_key_per_source_extension(fake_winreg, fake_proteus_exe):
@@ -128,18 +133,24 @@ def test_install_nests_a_verb_for_every_registered_pair_under_its_menu(
 ):
     installed = context_menu_module.install()
 
-    assert len(installed) == len(CONVERTER_REGISTRY)
+    # Two verbs per registered pair: plain convert + "replace original".
+    assert len(installed) == len(CONVERTER_REGISTRY) * 2
     for from_ext, to_ext in CONVERTER_REGISTRY:
         assert f"{from_ext} -> {to_ext}" in installed
+        assert f"{from_ext} -> {to_ext} (replace original)" in installed
 
         shell_path = (
             f"Software\\Classes\\SystemFileAssociations\\.{from_ext}"
             f"\\shell\\proteus_menu\\shell\\proteus_convert_to_{to_ext}"
         )
         command_path = f"{shell_path}\\command"
+        replace_shell_path = f"{shell_path}_replace"
+        replace_command_path = f"{replace_shell_path}\\command"
 
         assert (fake_winreg.HKEY_CURRENT_USER, shell_path) in fake_winreg.keys
         assert (fake_winreg.HKEY_CURRENT_USER, command_path) in fake_winreg.keys
+        assert (fake_winreg.HKEY_CURRENT_USER, replace_shell_path) in fake_winreg.keys
+        assert (fake_winreg.HKEY_CURRENT_USER, replace_command_path) in fake_winreg.keys
 
         command_value = fake_winreg.keys[(fake_winreg.HKEY_CURRENT_USER, command_path)][
             "values"
@@ -147,13 +158,22 @@ def test_install_nests_a_verb_for_every_registered_pair_under_its_menu(
         assert str(fake_proteus_exe) in command_value
         assert f"--to {to_ext}" in command_value
         assert "--from-context-menu" in command_value
+        assert "--replace-source" not in command_value
+
+        replace_command_value = fake_winreg.keys[
+            (fake_winreg.HKEY_CURRENT_USER, replace_command_path)
+        ]["values"][""]
+        assert str(fake_proteus_exe) in replace_command_value
+        assert f"--to {to_ext}" in replace_command_value
+        assert "--from-context-menu" in replace_command_value
+        assert "--replace-source" in replace_command_value
 
 
 def test_uninstall_after_install_leaves_no_proteus_keys(fake_winreg, fake_proteus_exe):
     context_menu_module.install()
     removed = context_menu_module.uninstall()
 
-    assert len(removed) == len(CONVERTER_REGISTRY)
+    assert len(removed) == len(CONVERTER_REGISTRY) * 2
     # Ancestor keys legitimately persist (e.g. "...\SystemFileAssociations",
     # "...\.docx\shell" — other, non-Proteus shell verbs might live there
     # too) — only the proteus_-prefixed subtree should be gone.
@@ -190,4 +210,4 @@ def test_uninstall_reports_only_pairs_actually_installed_not_current_registry(
 
     removed = context_menu_module.uninstall()
 
-    assert removed == ["docx -> pdf"]
+    assert removed == ["docx -> pdf", "docx -> pdf (replace original)"]

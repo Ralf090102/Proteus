@@ -3,6 +3,7 @@ conversion fidelity (that's the manual check / integration test)."""
 
 from __future__ import annotations
 
+import pytest
 from typer.testing import CliRunner
 
 from proteus import cli as cli_module
@@ -148,10 +149,9 @@ def test_uninstall_context_menu_reports_os_error_cleanly(monkeypatch):
     assert "Access is denied" in result.output
 
 
-def test_convert_from_context_menu_success_reveals_in_explorer_not_console(monkeypatch, tmp_path):
-    calls = []
-    monkeypatch.setattr(cli_module.subprocess, "Popen", lambda cmd: calls.append(cmd))
-
+def test_convert_from_context_menu_success_is_fully_silent(monkeypatch, tmp_path):
+    # Regression: a right-click conversion used to always pop open a new
+    # Explorer window on success — it must now do nothing visible at all.
     input_file = tmp_path / "in.docx"
     input_file.write_text("placeholder")
     output_path = tmp_path / "in.pdf"
@@ -170,10 +170,110 @@ def test_convert_from_context_menu_success_reveals_in_explorer_not_console(monke
     )
 
     assert result.exit_code == 0
-    assert result.output == ""  # no console output attempted in this mode
+    assert result.output == ""  # no console output, no Explorer window either
+    assert output_path.exists()
+    assert input_file.exists()  # source untouched without --replace-source
+
+
+def test_convert_replace_source_deletes_original_on_success(monkeypatch, tmp_path):
+    input_file = tmp_path / "in.docx"
+    input_file.write_text("placeholder")
+    output_path = tmp_path / "in.pdf"
+
+    class _FakeConverter:
+        def convert(self, input_path, out_path, options):
+            from proteus.core.converter import ConversionResult
+
+            output_path.write_bytes(b"%PDF-fake")
+            return ConversionResult(output_path=output_path)
+
+    monkeypatch.setattr(cli_module, "get_converter", lambda *a, **k: _FakeConverter())
+
+    result = runner.invoke(app, ["convert", str(input_file), "--to", "pdf", "--replace-source"])
+
+    assert result.exit_code == 0
+    assert output_path.exists()
+    assert not input_file.exists()
+
+
+def test_convert_replace_source_not_applied_when_conversion_fails(monkeypatch, tmp_path):
+    input_file = tmp_path / "in.docx"
+    input_file.write_text("placeholder")
+
+    def raise_conversion_failed(*args, **kwargs):
+        raise ConversionFailedError("boom")
+
+    monkeypatch.setattr(cli_module, "get_converter", raise_conversion_failed)
+
+    result = runner.invoke(app, ["convert", str(input_file), "--to", "pdf", "--replace-source"])
+
+    assert result.exit_code == 1
+    assert input_file.exists()
+
+
+def test_convert_replace_source_delete_failure_warns_but_does_not_fail_command(
+    monkeypatch, tmp_path
+):
+    # A locked/in-use source file is a real possibility — the conversion
+    # itself already succeeded, so this must be a warning, not a failure.
+    input_file = tmp_path / "in.docx"
+    input_file.write_text("placeholder")
+    output_path = tmp_path / "in.pdf"
+
+    class _FakeConverter:
+        def convert(self, input_path, out_path, options):
+            from proteus.core.converter import ConversionResult
+
+            output_path.write_bytes(b"%PDF-fake")
+            return ConversionResult(output_path=output_path)
+
+    monkeypatch.setattr(cli_module, "get_converter", lambda *a, **k: _FakeConverter())
+    monkeypatch.setattr(
+        cli_module.Path, "unlink", lambda self: (_ for _ in ()).throw(OSError("in use"))
+    )
+
+    result = runner.invoke(app, ["convert", str(input_file), "--to", "pdf", "--replace-source"])
+
+    assert result.exit_code == 0
+    assert "Warning" in result.output
+    assert "in use" in result.output
+
+
+def test_convert_replace_source_delete_failure_from_context_menu_shows_message_box(
+    monkeypatch, tmp_path
+):
+    calls = []
+    monkeypatch.setattr(
+        cli_module.ctypes.windll.user32,
+        "MessageBoxW",
+        lambda *args: calls.append(args),
+    )
+
+    input_file = tmp_path / "in.docx"
+    input_file.write_text("placeholder")
+    output_path = tmp_path / "in.pdf"
+
+    class _FakeConverter:
+        def convert(self, input_path, out_path, options):
+            from proteus.core.converter import ConversionResult
+
+            output_path.write_bytes(b"%PDF-fake")
+            return ConversionResult(output_path=output_path)
+
+    monkeypatch.setattr(cli_module, "get_converter", lambda *a, **k: _FakeConverter())
+    monkeypatch.setattr(
+        cli_module.Path, "unlink", lambda self: (_ for _ in ()).throw(OSError("in use"))
+    )
+
+    result = runner.invoke(
+        app,
+        ["convert", str(input_file), "--to", "pdf", "--replace-source", "--from-context-menu"],
+    )
+
+    assert result.exit_code == 0
+    assert result.output == ""
     assert len(calls) == 1
-    assert calls[0][0] == "explorer"
-    assert calls[0][1] == f"/select,{output_path}"
+    assert "in use" in calls[0][1]
 
 
 def test_convert_from_context_menu_failure_shows_message_box_not_console(monkeypatch, tmp_path):
@@ -200,3 +300,41 @@ def test_convert_from_context_menu_failure_shows_message_box_not_console(monkeyp
     assert result.output == ""  # no console output attempted in this mode
     assert len(calls) == 1
     assert "boom" in calls[0][1]
+
+
+def test_main_shows_message_box_for_unexpected_error_from_context_menu(monkeypatch):
+    # A windowed proteus-gui process (see main()'s docstring) has no
+    # console to show a traceback in — anything that escapes app()'s own
+    # ProteusError handling during --from-context-menu must still surface
+    # somewhere, not vanish silently.
+    calls = []
+    monkeypatch.setattr(
+        cli_module.ctypes.windll.user32,
+        "MessageBoxW",
+        lambda *args: calls.append(args),
+    )
+
+    def raise_unexpected(*args, **kwargs):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(cli_module, "app", raise_unexpected)
+    monkeypatch.setattr(
+        cli_module.sys, "argv", ["proteus-gui", "convert", "x", "--from-context-menu"]
+    )
+
+    with pytest.raises(SystemExit):
+        cli_module.main()
+
+    assert len(calls) == 1
+    assert "boom" in calls[0][1]
+
+
+def test_main_reraises_unexpected_error_when_not_from_context_menu(monkeypatch):
+    def raise_unexpected(*args, **kwargs):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(cli_module, "app", raise_unexpected)
+    monkeypatch.setattr(cli_module.sys, "argv", ["proteus", "convert", "x"])
+
+    with pytest.raises(ValueError, match="boom"):
+        cli_module.main()

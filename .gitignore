@@ -26,3 +26,6 @@ Thumbs.db
 
 # Editors
 .vscode/
+
+# Fixtures
+tests/fixtures/

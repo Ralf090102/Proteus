@@ -8,12 +8,19 @@ children as a submenu" instead of treating the key as a leaf command).
 
 Key shape, derived from CONVERTER_REGISTRY:
   HKCU\\Software\\Classes\\SystemFileAssociations\\.{from_ext}
-    \\shell\\proteus_menu                    (parent: MUIVerb, SubCommands)
-      \\shell\\proteus_convert_to_{to_ext}   (one per registered pair for that from_ext)
+    \\shell\\proteus_menu                            (parent: MUIVerb, SubCommands)
+      \\shell\\proteus_convert_to_{to_ext}           (one per registered pair for that from_ext)
+        \\command
+      \\shell\\proteus_convert_to_{to_ext}_replace   (same pair, also deletes the source on success)
         \\command
 
 HKCU-only — no admin rights. Every key this installs is proteus_-prefixed
 so uninstall() removes exactly what install() created and nothing else.
+
+Every verb's Command invokes proteus-gui (a windowed-subsystem twin of the
+regular proteus CLI, see [project.gui-scripts] in pyproject.toml) rather
+than proteus itself, so a right-click conversion doesn't flash a console
+window.
 """
 
 from __future__ import annotations
@@ -27,13 +34,17 @@ from proteus.core.registry import CONVERTER_REGISTRY
 MENU_KEY_NAME = "proteus_menu"
 MENU_DISPLAY_NAME = "Proteus"
 VERB_PREFIX = "proteus_convert_to_"
+REPLACE_SUFFIX = "_replace"
 CLASSES_ROOT = winreg.HKEY_CURRENT_USER
-PROTEUS_BIN = "proteus"
-PROTEUS_ENV_VAR = "PROTEUS_EXE_PATH"
+# Windowed-subsystem twin of the regular `proteus` console CLI (see
+# [project.gui-scripts] in pyproject.toml) — every verb's Command points
+# here instead, so a right-click conversion doesn't flash a console window.
+PROTEUS_GUI_BIN = "proteus-gui"
+PROTEUS_GUI_ENV_VAR = "PROTEUS_GUI_EXE_PATH"
 
 
-def _verb_name(to_ext: str) -> str:
-    return f"{VERB_PREFIX}{to_ext}"
+def _verb_name(to_ext: str, *, replace_source: bool = False) -> str:
+    return f"{VERB_PREFIX}{to_ext}{REPLACE_SUFFIX if replace_source else ''}"
 
 
 def _menu_key_path(from_ext: str) -> str:
@@ -49,8 +60,10 @@ def _pairs_by_from_ext() -> dict[str, list[str]]:
     return grouped
 
 
-def _proteus_exe_path() -> Path:
-    """Resolve the installed `proteus` CLI's own absolute exe path.
+def _proteus_gui_exe_path() -> Path:
+    """Resolve the installed `proteus-gui` exe's own absolute path — the
+    windowed twin of the regular `proteus` console CLI that every verb's
+    Command actually invokes.
 
     Explorer launches the registered command with no working directory
     or project-venv context of its own, so this needs a stable, global
@@ -59,10 +72,10 @@ def _proteus_exe_path() -> Path:
     rather than a bare shutil.which(), for the same PATH-unreliability
     reason LibreOffice/Pandoc do.
     """
-    status = find_tool(PROTEUS_BIN, env_var=PROTEUS_ENV_VAR)
+    status = find_tool(PROTEUS_GUI_BIN, env_var=PROTEUS_GUI_ENV_VAR)
     if not status.available:
         raise RuntimeError(
-            "proteus isn't on PATH. Run `uv tool install .` first so the context "
+            "proteus-gui isn't on PATH. Run `uv tool install .` first so the context "
             "menu has a stable exe path to point at."
         )
     return status.path.resolve()
@@ -70,19 +83,23 @@ def _proteus_exe_path() -> Path:
 
 def install() -> list[str]:
     """Install one "Proteus" cascading submenu per source extension, with
-    one item inside it per registered conversion pair for that extension.
+    two items inside it per registered conversion pair for that extension
+    (a plain convert, and a "(Replace Original)" variant that also deletes
+    the source file on success).
 
-    Returns the "from -> to" pairs installed.
+    Returns the "from -> to" pairs installed (replace variants marked).
     """
-    exe_path = _proteus_exe_path()
+    exe_path = _proteus_gui_exe_path()
     pairs_by_ext = _pairs_by_from_ext()
 
     installed = []
     for from_ext, to_exts in pairs_by_ext.items():
         _install_menu(from_ext)
         for to_ext in to_exts:
-            _install_verb(exe_path, from_ext, to_ext)
+            _install_verb(exe_path, from_ext, to_ext, replace_source=False)
             installed.append(f"{from_ext} -> {to_ext}")
+            _install_verb(exe_path, from_ext, to_ext, replace_source=True)
+            installed.append(f"{from_ext} -> {to_ext} (replace original)")
     return installed
 
 
@@ -95,15 +112,22 @@ def _install_menu(from_ext: str) -> None:
         winreg.SetValueEx(key, "SubCommands", 0, winreg.REG_SZ, "")
 
 
-def _install_verb(exe_path: Path, from_ext: str, to_ext: str) -> None:
-    verb = _verb_name(to_ext)
+def _install_verb(
+    exe_path: Path, from_ext: str, to_ext: str, *, replace_source: bool
+) -> None:
+    verb = _verb_name(to_ext, replace_source=replace_source)
     shell_key_path = rf"{_menu_key_path(from_ext)}\shell\{verb}"
     command_key_path = rf"{shell_key_path}\command"
 
+    label = f"Convert to {to_ext.upper()}"
+    if replace_source:
+        label += " (Replace Original)"
     with winreg.CreateKeyEx(CLASSES_ROOT, shell_key_path) as key:
-        winreg.SetValueEx(key, "", 0, winreg.REG_SZ, f"Convert to {to_ext.upper()}")
+        winreg.SetValueEx(key, "", 0, winreg.REG_SZ, label)
 
     command = f'"{exe_path}" convert "%1" --to {to_ext} --from-context-menu'
+    if replace_source:
+        command += " --replace-source"
     with winreg.CreateKeyEx(CLASSES_ROOT, command_key_path) as key:
         winreg.SetValueEx(key, "", 0, winreg.REG_SZ, command)
 
@@ -127,8 +151,11 @@ def uninstall() -> list[str]:
         if _delete_key_tree(CLASSES_ROOT, menu_path):
             for verb in actual_verbs:
                 if verb.startswith(VERB_PREFIX):
-                    to_ext = verb.removeprefix(VERB_PREFIX)
-                    removed.append(f"{from_ext} -> {to_ext}")
+                    rest = verb.removeprefix(VERB_PREFIX)
+                    replace_source = rest.endswith(REPLACE_SUFFIX)
+                    to_ext = rest.removesuffix(REPLACE_SUFFIX) if replace_source else rest
+                    suffix = " (replace original)" if replace_source else ""
+                    removed.append(f"{from_ext} -> {to_ext}{suffix}")
     return removed
 
 

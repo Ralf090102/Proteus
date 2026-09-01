@@ -37,10 +37,11 @@ KNOWN_INSTALL_PATHS: dict[str, tuple[Path, ...]] = {
         Path.home() / "AppData" / "Local" / "Pandoc" / "pandoc.exe",
         Path(r"C:\Program Files\Pandoc\pandoc.exe"),
     ),
-    # `uv tool install .`'s own default shim location — the context menu
-    # needs this same fallback (not just a bare shutil.which()) for the
-    # same reason LibreOffice/Pandoc do.
-    "proteus": (Path.home() / ".local" / "bin" / "proteus.exe",),
+    # `uv tool install .`'s own default shim location for the windowed
+    # `proteus-gui` exe (see [project.gui-scripts] in pyproject.toml) — the
+    # context menu needs this same fallback (not just a bare shutil.which())
+    # for the same reason LibreOffice/Pandoc do.
+    "proteus-gui": (Path.home() / ".local" / "bin" / "proteus-gui.exe",),
 }
 
 

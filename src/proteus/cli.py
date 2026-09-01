@@ -3,13 +3,16 @@
 `convert`, `list-formats`, `doctor` are real as of Phase 3; `convert`'s
 `--from-context-menu` handling and `install-context-menu`/
 `uninstall-context-menu` are real as of Phase 6, backed by
-windows/context_menu.py.
+windows/context_menu.py. A context-menu-launched conversion is silent on
+success (no console, no Explorer window) and only surfaces a native message
+box on failure or on a non-fatal `--replace-source` warning; `--replace-source`
+deletes the original file once conversion succeeds.
 """
 
 from __future__ import annotations
 
 import ctypes
-import subprocess
+import sys
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
@@ -33,6 +36,7 @@ console = Console()
 error_console = Console(stderr=True)
 
 _MB_ICONERROR = 0x10
+_MB_ICONWARNING = 0x30
 
 
 @app.callback()
@@ -54,6 +58,11 @@ def convert(
     to: str = typer.Option(..., "--to", help="Target format, e.g. pdf"),
     output: Path | None = typer.Option(
         None, "--output", "-o", help="Output path (default: input file, new extension)."
+    ),
+    replace_source: bool = typer.Option(
+        False,
+        "--replace-source",
+        help="Delete the original file after a successful conversion.",
     ),
     from_context_menu: bool = typer.Option(
         False,
@@ -82,9 +91,18 @@ def convert(
         _report_error(str(e), from_context_menu)
         raise typer.Exit(1) from None
 
-    if from_context_menu:
-        _reveal_in_explorer(result.output_path)
-    else:
+    if replace_source and result.output_path.resolve() != input_file.resolve():
+        try:
+            input_file.unlink()
+        except OSError as e:
+            # The conversion itself succeeded — a locked/in-use source file
+            # not being deletable is a non-fatal warning, not a command
+            # failure.
+            _report_warning(
+                f"Converted, but couldn't delete the original file: {e}", from_context_menu
+            )
+
+    if not from_context_menu:
         console.print(f"[bold green]Converted[/bold green] -> {escape(str(result.output_path))}")
 
 
@@ -93,17 +111,24 @@ def _report_error(message: str, from_context_menu: bool) -> None:
     attached at all, so writing to error_console isn't just invisible, it
     can itself raise. Show a native message box there instead."""
     if from_context_menu:
-        _show_message_box("Proteus — Conversion Failed", message)
+        _show_message_box("Proteus — Conversion Failed", message, icon=_MB_ICONERROR)
     else:
         error_console.print(f"[bold red]Error:[/bold red] {escape(message)}")
 
 
-def _show_message_box(title: str, message: str) -> None:
-    ctypes.windll.user32.MessageBoxW(None, message, title, _MB_ICONERROR)
+def _report_warning(message: str, from_context_menu: bool) -> None:
+    """Report a non-fatal issue after an otherwise-successful conversion
+    (e.g. --replace-source couldn't delete the original) — same
+    console/message-box split as _report_error, but doesn't fail the
+    command."""
+    if from_context_menu:
+        _show_message_box("Proteus — Warning", message, icon=_MB_ICONWARNING)
+    else:
+        console.print(f"[bold yellow]Warning:[/bold yellow] {escape(message)}")
 
 
-def _reveal_in_explorer(output_path: Path) -> None:
-    subprocess.Popen(["explorer", f"/select,{output_path}"])
+def _show_message_box(title: str, message: str, *, icon: int = _MB_ICONERROR) -> None:
+    ctypes.windll.user32.MessageBoxW(None, message, title, icon)
 
 
 @app.command(name="list-formats")
@@ -165,7 +190,21 @@ def uninstall_context_menu() -> None:
 
 
 def main() -> None:
-    app()
+    """Entry point for both `proteus` (console-subsystem) and `proteus-gui`
+    (windowed-subsystem, see [project.gui-scripts] in pyproject.toml — the
+    context menu invokes this one, see windows/context_menu.py). A windowed
+    process has no console to show a traceback in, so anything that escapes
+    app()'s own ProteusError handling during a --from-context-menu run
+    needs to become a message box instead of vanishing silently."""
+    try:
+        app()
+    except SystemExit:
+        raise
+    except Exception as e:
+        if "--from-context-menu" in sys.argv:
+            _show_message_box("Proteus — Unexpected Error", str(e))
+            sys.exit(1)
+        raise
 
 
 if __name__ == "__main__":

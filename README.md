@@ -6,8 +6,9 @@ machine.
 
 ## Status
 
-**Planning/scaffolding — no working converters yet.** This repo currently has the project
-skeleton in place; real conversion logic lands over the next phases (see Roadmap below).
+All v1 conversion pairs work end to end (`docx→pdf`, `docx↔md`, `md→pdf`, `pdf→docx`,
+`pdf→txt`), and the Windows right-click context-menu layer is built and installable. Remaining:
+Phase 7 polish (richer `doctor` output, install-links for missing tools, packaging notes).
 
 ## Why
 
