@@ -23,6 +23,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from proteus.converters.image import PILLOW_INSTALL_HINT
 from proteus.core.converter import ConversionOptions, ToolCheck
 from proteus.core.dependencies import INSTALL_LINKS, WINGET_PACKAGE_IDS
 from proteus.core.errors import ProteusError
@@ -176,71 +177,95 @@ def doctor() -> None:
     if missing_tools:
         console.print()
         console.print("[bold yellow]Install missing tools:[/bold yellow]")
-        for bin_name in missing_tools:
-            link = INSTALL_LINKS.get(bin_name)
-            line = f"  {bin_name}"
-            if link:
-                line += f" — {link}"
-            console.print(escape(line))
-        if any(bin_name in WINGET_PACKAGE_IDS for bin_name in missing_tools):
+        for bin_name, kind in missing_tools.items():
+            console.print(escape(_missing_tool_line(bin_name, kind)))
+        if any(
+            kind == "tool" and bin_name in WINGET_PACKAGE_IDS
+            for bin_name, kind in missing_tools.items()
+        ):
             console.print()
             console.print(
                 "Or run [bold]proteus install-deps[/bold] to install automatically via winget."
             )
 
 
+def _missing_tool_line(bin_name: str, kind: str) -> str:
+    """One line for a missing dependency — an optional Python extra
+    (kind="extra", e.g. Pillow) has no download-page link, its fix is a
+    `uv tool install` command; an external tool (kind="tool") uses
+    INSTALL_LINKS same as always."""
+    if kind == "extra":
+        return f"  {bin_name} — optional extra not installed, run: {PILLOW_INSTALL_HINT}"
+    return _manual_install_line(bin_name)
+
+
 def _doctor_details(checks: tuple[ToolCheck, ...]) -> str:
     """Build doctor's Details cell for one converter: where each required
-    tool was found, or a short "not found" flag — the full install link
-    for anything missing goes in the separate list doctor() prints below
-    the table instead (see there for why)."""
+    tool was found, or a short "not found"/"optional extra not installed"
+    flag — the full install link for anything missing goes in the
+    separate list doctor() prints below the table instead (see there for
+    why)."""
     if not checks:
         return "bundled Python library — no external tool needed"
 
     parts = []
-    for bin_name, status in checks:
+    for bin_name, status, kind in checks:
         if status.available:
             parts.append(f"{bin_name}: {status.path}")
+        elif kind == "extra":
+            parts.append(f"{bin_name}: optional extra not installed")
         else:
             parts.append(f"{bin_name}: not found")
     return escape(" | ".join(parts))
 
 
-def _collect_missing_tools() -> dict[str, None]:
-    """Every distinct external-tool bin_name that's missing across all
-    registered converters, in first-seen order, deduped (a tool missing
-    for multiple pairs — e.g. soffice for both docx->pdf and the md->pdf
-    chain — is only counted once). Shared by doctor() and install_deps()."""
-    missing: dict[str, None] = {}
+def _collect_missing_tools() -> dict[str, str]:
+    """Every distinct external-tool/optional-extra bin_name that's missing
+    across all registered converters, in first-seen order, deduped (a
+    dependency missing for multiple pairs — e.g. soffice for both
+    docx->pdf and the md->pdf chain — is only counted once), mapped to
+    its ToolCheck kind ("tool" | "extra"). Shared by doctor() and
+    install_deps()."""
+    missing: dict[str, str] = {}
     for converter_class in CONVERTER_REGISTRY.values():
-        for bin_name, status in converter_class().tool_checks():
+        for bin_name, status, kind in converter_class().tool_checks():
             if not status.available:
-                missing.setdefault(bin_name, None)
+                missing.setdefault(bin_name, kind)
     return missing
 
 
 @app.command(name="install-deps")
 def install_deps() -> None:
-    """Install missing external tools (LibreOffice, Pandoc) via winget."""
+    """Install missing external tools (LibreOffice, Pandoc) via winget.
+
+    Optional Python-package extras (e.g. Pillow for image conversion) are
+    a different install path entirely — `uv tool install .[images]`, not
+    an external binary winget can install — so those are only reported
+    here (see _print_extras_hint), never attempted.
+    """
     missing_tools = _collect_missing_tools()
     if not missing_tools:
         console.print("[bold green]Everything needed is already installed.[/bold green]")
         return
 
-    installable = {
-        bin_name: WINGET_PACKAGE_IDS[bin_name]
-        for bin_name in missing_tools
-        if bin_name in WINGET_PACKAGE_IDS
-    }
-    not_installable = [bin_name for bin_name in missing_tools if bin_name not in installable]
+    tools_missing = [b for b, kind in missing_tools.items() if kind == "tool"]
+    extras_missing = [b for b, kind in missing_tools.items() if kind == "extra"]
+
+    if not tools_missing:
+        _print_extras_hint(extras_missing)
+        return
+
+    installable = {b: WINGET_PACKAGE_IDS[b] for b in tools_missing if b in WINGET_PACKAGE_IDS}
+    not_installable = [b for b in tools_missing if b not in installable]
 
     if installable and shutil.which("winget") is None:
         error_console.print(
             "[bold red]Error:[/bold red] winget was not found on PATH. Install "
             "'App Installer' from the Microsoft Store, or install these manually:"
         )
-        for bin_name in missing_tools:
+        for bin_name in tools_missing:
             console.print(escape(_manual_install_line(bin_name)))
+        _print_extras_hint(extras_missing)
         raise typer.Exit(1)
 
     succeeded: list[str] = []
@@ -267,13 +292,28 @@ def install_deps() -> None:
             f"{len(not_installable)} need manual install.[/bold yellow] "
             "Run [bold]proteus doctor[/bold] to confirm."
         )
+        _print_extras_hint(extras_missing)
         if not succeeded:
             raise typer.Exit(1)
-    else:
-        console.print(
-            f"[bold green]Installed {len(succeeded)} tool(s).[/bold green] "
-            "Run [bold]proteus doctor[/bold] to confirm."
-        )
+        return
+
+    console.print(
+        f"[bold green]Installed {len(succeeded)} tool(s).[/bold green] "
+        "Run [bold]proteus doctor[/bold] to confirm."
+    )
+    _print_extras_hint(extras_missing)
+
+
+def _print_extras_hint(extras_missing: list[str]) -> None:
+    """Optional Python-package extras never go through winget — report
+    them separately rather than folding into the tools summary/exit code
+    above, since install-deps has nothing to automate for them."""
+    if not extras_missing:
+        return
+    console.print()
+    console.print("[bold yellow]Optional extras not installed:[/bold yellow]")
+    for bin_name in extras_missing:
+        console.print(escape(f"  {bin_name} — run: {PILLOW_INSTALL_HINT}"))
 
 
 def _manual_install_line(bin_name: str) -> str:

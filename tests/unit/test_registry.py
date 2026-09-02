@@ -5,6 +5,14 @@ from __future__ import annotations
 import pytest
 
 from proteus.converters.chains import MarkdownToPdfChainConverter
+from proteus.converters.image import (
+    JpgToPngConverter,
+    JpgToWebpConverter,
+    PngToJpgConverter,
+    PngToWebpConverter,
+    WebpToJpgConverter,
+    WebpToPngConverter,
+)
 from proteus.converters.libreoffice import LibreOfficeConverter
 from proteus.converters.pandoc import DocxToMarkdownConverter, MarkdownToDocxConverter
 from proteus.converters.pdf_extract import Pdf2DocxConverter, PyMuPdfTextExtractConverter
@@ -34,6 +42,30 @@ def test_pdf_to_docx_registered_to_pdf2docx_converter():
 
 def test_pdf_to_txt_registered_to_pymupdf_converter():
     assert CONVERTER_REGISTRY[("pdf", "txt")] is PyMuPdfTextExtractConverter
+
+
+def test_png_to_jpg_registered_to_image_converter():
+    assert CONVERTER_REGISTRY[("png", "jpg")] is PngToJpgConverter
+
+
+def test_jpg_to_png_registered_to_image_converter():
+    assert CONVERTER_REGISTRY[("jpg", "png")] is JpgToPngConverter
+
+
+def test_webp_to_jpg_registered_to_image_converter():
+    assert CONVERTER_REGISTRY[("webp", "jpg")] is WebpToJpgConverter
+
+
+def test_webp_to_png_registered_to_image_converter():
+    assert CONVERTER_REGISTRY[("webp", "png")] is WebpToPngConverter
+
+
+def test_jpg_to_webp_registered_to_image_converter():
+    assert CONVERTER_REGISTRY[("jpg", "webp")] is JpgToWebpConverter
+
+
+def test_png_to_webp_registered_to_image_converter():
+    assert CONVERTER_REGISTRY[("png", "webp")] is PngToWebpConverter
 
 
 def test_get_converter_known_pair_constructs_instance(fake_converter):

@@ -37,6 +37,13 @@ dev = [
     "ruff>=0.6",
     "python-docx>=1.1",
 ]
+# png/jpg/webp conversion (converters/image.py) — deliberately optional,
+# not a base dependency: install via `uv tool install .[images]`. Floor
+# is recent enough that prebuilt wheels bundle libwebp, so no separate
+# system WebP library install is needed.
+images = [
+    "Pillow>=10",
+]
 
 [dependency-groups]
 dev = [

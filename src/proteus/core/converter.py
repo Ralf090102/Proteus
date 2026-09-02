@@ -61,10 +61,21 @@ def ensure_output_created(output_path: Path, backend_name: str) -> None:
 
 class ToolCheck(NamedTuple):
     """One external tool a converter depends on, paired with its resolved
-    find_tool() status — e.g. ("soffice", AvailabilityStatus(...))."""
+    find_tool() status — e.g. ("soffice", AvailabilityStatus(...)).
+
+    kind distinguishes an external binary ("tool", the default — resolved
+    via find_tool(), fixed via an INSTALL_LINKS download page or
+    `proteus install-deps`) from an optional Python package extra
+    ("extra" — e.g. Pillow, resolved via a plain `import`, fixed via
+    `uv tool install .[images]`, never a winget/download-link candidate).
+    doctor()/install_deps() in cli.py branch on this to avoid printing a
+    "not found" + broken download link for something that was never an
+    external tool to begin with.
+    """
 
     bin_name: str
     status: AvailabilityStatus
+    kind: str = "tool"  # "tool" | "extra"
 
 
 class Converter(ABC):

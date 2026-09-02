@@ -27,5 +27,12 @@ Thumbs.db
 # Editors
 .vscode/
 
-# Fixtures
-tests/fixtures/
+# Fixtures — real fixtures ARE committed (see CLAUDE.md: "small, committed
+# sample files"); only ignore stray manual-test leftovers that have
+# accumulated in this directory (New.* from an early manual test,
+# replica.* from a manual right-click round-trip test), unreferenced by
+# any test. A blanket `tests/fixtures/` here previously (accidentally)
+# untracked sample.docx/sample.md/sample.pdf from git entirely — every
+# test in this repo depends on those actually being committed.
+tests/fixtures/New.*
+tests/fixtures/replica.*

@@ -133,6 +133,9 @@ def test_doctor_chain_pair_details_surfaces_both_underlying_tools(monkeypatch):
 
 
 def test_doctor_prints_no_install_links_section_when_everything_available(monkeypatch):
+    import sys
+    import types
+
     from proteus.converters import libreoffice as libreoffice_module
     from proteus.converters import pandoc as pandoc_module
     from proteus.core.dependencies import AvailabilityStatus
@@ -140,6 +143,14 @@ def test_doctor_prints_no_install_links_section_when_everything_available(monkey
     available = AvailabilityStatus(True, Path("/usr/bin/tool"), "path")
     monkeypatch.setattr(pandoc_module, "find_tool", lambda *a, **k: available)
     monkeypatch.setattr(libreoffice_module, "find_tool", lambda *a, **k: available)
+
+    # Pillow (the `images` extra, backing the png/jpg/webp pairs) may or
+    # may not actually be installed in the environment running this test —
+    # stub it present so "everything available" genuinely means everything,
+    # independent of whether the optional extra happens to be installed.
+    fake_pil = types.ModuleType("PIL")
+    fake_pil.__file__ = "C:/fake-site-packages/PIL/__init__.py"
+    monkeypatch.setitem(sys.modules, "PIL", fake_pil)
 
     result = runner.invoke(app, ["doctor"])
 
@@ -157,7 +168,7 @@ def test_install_deps_reports_nothing_missing_when_all_available(monkeypatch):
 
 
 def test_install_deps_installs_missing_tools_via_winget(monkeypatch):
-    monkeypatch.setattr(cli_module, "_collect_missing_tools", lambda: {"soffice": None})
+    monkeypatch.setattr(cli_module, "_collect_missing_tools", lambda: {"soffice": "tool"})
     monkeypatch.setattr(cli_module.shutil, "which", lambda name: "C:/winget.exe")
     monkeypatch.setattr(cli_module, "_install_via_winget", lambda package_id: True)
 
@@ -169,7 +180,7 @@ def test_install_deps_installs_missing_tools_via_winget(monkeypatch):
 
 
 def test_install_deps_reports_failure_when_winget_install_fails(monkeypatch):
-    monkeypatch.setattr(cli_module, "_collect_missing_tools", lambda: {"soffice": None})
+    monkeypatch.setattr(cli_module, "_collect_missing_tools", lambda: {"soffice": "tool"})
     monkeypatch.setattr(cli_module.shutil, "which", lambda name: "C:/winget.exe")
     monkeypatch.setattr(cli_module, "_install_via_winget", lambda package_id: False)
 
@@ -180,7 +191,7 @@ def test_install_deps_reports_failure_when_winget_install_fails(monkeypatch):
 
 
 def test_install_deps_errors_when_winget_missing(monkeypatch):
-    monkeypatch.setattr(cli_module, "_collect_missing_tools", lambda: {"soffice": None})
+    monkeypatch.setattr(cli_module, "_collect_missing_tools", lambda: {"soffice": "tool"})
     monkeypatch.setattr(cli_module.shutil, "which", lambda name: None)
 
     result = runner.invoke(app, ["install-deps"])
@@ -191,7 +202,7 @@ def test_install_deps_errors_when_winget_missing(monkeypatch):
 
 
 def test_install_deps_lists_manual_install_for_tool_without_winget_package(monkeypatch):
-    monkeypatch.setattr(cli_module, "_collect_missing_tools", lambda: {"some-tool": None})
+    monkeypatch.setattr(cli_module, "_collect_missing_tools", lambda: {"some-tool": "tool"})
 
     result = runner.invoke(app, ["install-deps"])
 
@@ -200,6 +211,31 @@ def test_install_deps_lists_manual_install_for_tool_without_winget_package(monke
     assert result.exit_code == 1
     assert "No winget package for" in result.stdout
     assert "some-tool" in result.stdout
+
+
+def test_install_deps_reports_missing_extra_without_attempting_winget(monkeypatch):
+    monkeypatch.setattr(cli_module, "_collect_missing_tools", lambda: {"pillow": "extra"})
+
+    result = runner.invoke(app, ["install-deps"])
+
+    assert result.exit_code == 0
+    assert "Optional extras not installed" in result.stdout
+    assert "uv tool install .[images]" in result.stdout
+
+
+def test_install_deps_reports_both_missing_tool_and_missing_extra(monkeypatch):
+    monkeypatch.setattr(
+        cli_module, "_collect_missing_tools", lambda: {"soffice": "tool", "pillow": "extra"}
+    )
+    monkeypatch.setattr(cli_module.shutil, "which", lambda name: "C:/winget.exe")
+    monkeypatch.setattr(cli_module, "_install_via_winget", lambda package_id: True)
+
+    result = runner.invoke(app, ["install-deps"])
+
+    assert result.exit_code == 0
+    assert "Installed 1 tool(s)" in result.stdout
+    assert "Optional extras not installed" in result.stdout
+    assert "pillow" in result.stdout
 
 
 def test_doctor_hints_at_install_deps_when_a_winget_installable_tool_is_missing(monkeypatch):
@@ -243,6 +279,27 @@ def test_install_via_winget_returns_false_on_nonzero_exit(monkeypatch):
     monkeypatch.setattr(cli_module.subprocess, "run", lambda cmd, **kwargs: _FakeCompletedProcess())
 
     assert cli_module._install_via_winget("Some.Package") is False
+
+
+def test_doctor_shows_optional_extra_not_installed_not_not_found(monkeypatch):
+    # Regression for the roadmap's explicit ask: a missing optional Python
+    # extra (Pillow) must read differently from a missing external tool —
+    # there's no download-page link for a pip extra, the fix is a `uv
+    # tool install` command instead.
+    import sys
+
+    monkeypatch.setitem(sys.modules, "PIL", None)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    # Table cells can line-wrap under CliRunner's narrow default width
+    # (same caveat as the other doctor table-content tests above), so
+    # check the footer's install-instructions list — always printed as
+    # one unwrapped line — rather than the table's Details cell directly.
+    assert "optional extra not installed" in result.output
+    assert "uv tool install .[images]" in result.output
+    assert "pillow: not found" not in result.output.replace("\n", "")
 
 
 def test_convert_unregistered_pair_exits_nonzero(tmp_path):

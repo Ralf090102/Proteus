@@ -15,6 +15,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from proteus.converters.chains import MarkdownToPdfChainConverter
+from proteus.converters.image import (
+    JpgToPngConverter,
+    JpgToWebpConverter,
+    PngToJpgConverter,
+    PngToWebpConverter,
+    WebpToJpgConverter,
+    WebpToPngConverter,
+)
 from proteus.converters.libreoffice import LibreOfficeConverter
 from proteus.converters.pandoc import DocxToMarkdownConverter, MarkdownToDocxConverter
 from proteus.converters.pdf_extract import Pdf2DocxConverter, PyMuPdfTextExtractConverter
@@ -28,6 +36,12 @@ CONVERTER_REGISTRY: dict[tuple[str, str], type[Converter]] = {
     ("md", "pdf"): MarkdownToPdfChainConverter,
     ("pdf", "docx"): Pdf2DocxConverter,
     ("pdf", "txt"): PyMuPdfTextExtractConverter,
+    ("png", "jpg"): PngToJpgConverter,
+    ("jpg", "png"): JpgToPngConverter,
+    ("webp", "jpg"): WebpToJpgConverter,
+    ("webp", "png"): WebpToPngConverter,
+    ("jpg", "webp"): JpgToWebpConverter,
+    ("png", "webp"): PngToWebpConverter,
 }
 
 
