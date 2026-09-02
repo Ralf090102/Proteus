@@ -22,7 +22,7 @@ from pathlib import Path
 class AvailabilityStatus:
     available: bool
     path: Path | None
-    source: str  # "env" | "path" | "known-location" | "not-found"
+    source: str  # "env" | "path" | "known-location" | "package" | "not-found"
 
 
 # Hand-maintained, deliberately — matches the project's existing

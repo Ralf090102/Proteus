@@ -223,6 +223,62 @@ def test_install_deps_reports_missing_extra_without_attempting_winget(monkeypatc
     assert "uv tool install .[images]" in result.stdout
 
 
+def test_install_deps_exits_nonzero_on_partial_failure(monkeypatch):
+    # Regression: installing 2 tools where one succeeds and one fails must
+    # not exit 0 just because *something* succeeded — a caller scripting
+    # `install-deps && doctor` needs partial failure to read as failure.
+    monkeypatch.setattr(
+        cli_module, "_collect_missing_tools", lambda: {"soffice": "tool", "pandoc": "tool"}
+    )
+    monkeypatch.setattr(cli_module.shutil, "which", lambda name: "C:/winget.exe")
+    results = {
+        cli_module.WINGET_PACKAGE_IDS["soffice"]: True,
+        cli_module.WINGET_PACKAGE_IDS["pandoc"]: False,
+    }
+    monkeypatch.setattr(cli_module, "_install_via_winget", lambda package_id: results[package_id])
+
+    result = runner.invoke(app, ["install-deps"])
+
+    assert result.exit_code == 1
+    assert "1 installed, 1 failed" in result.stdout
+
+
+def test_collect_missing_tools_raises_on_unrecognized_kind(monkeypatch):
+    # A ToolCheck.kind that's neither "tool" nor "extra" must fail loudly
+    # here (the single choke point doctor()/install_deps() both use)
+    # rather than silently landing in neither bucket downstream.
+    from proteus.core.converter import ToolCheck
+    from proteus.core.dependencies import AvailabilityStatus
+
+    class _BadConverter:
+        def tool_checks(self):
+            return (ToolCheck("mystery", AvailabilityStatus(False, None, "not-found"), "bogus"),)
+
+    monkeypatch.setattr(cli_module, "CONVERTER_REGISTRY", {("x", "y"): _BadConverter})
+
+    with pytest.raises(RuntimeError, match="unrecognized ToolCheck kind"):
+        cli_module._collect_missing_tools()
+
+
+def test_doctor_does_not_hint_install_deps_when_only_extra_missing(monkeypatch):
+    import sys
+
+    from proteus.converters import libreoffice as libreoffice_module
+    from proteus.converters import pandoc as pandoc_module
+    from proteus.core.dependencies import AvailabilityStatus
+
+    available = AvailabilityStatus(True, Path("/usr/bin/tool"), "path")
+    monkeypatch.setattr(pandoc_module, "find_tool", lambda *a, **k: available)
+    monkeypatch.setattr(libreoffice_module, "find_tool", lambda *a, **k: available)
+    monkeypatch.setitem(sys.modules, "PIL", None)  # only pillow (an extra) is missing
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "optional extra not installed" in result.output  # extra IS reported
+    assert "proteus install-deps" not in result.output.replace("\n", "")  # but no winget hint
+
+
 def test_install_deps_reports_both_missing_tool_and_missing_extra(monkeypatch):
     monkeypatch.setattr(
         cli_module, "_collect_missing_tools", lambda: {"soffice": "tool", "pillow": "extra"}

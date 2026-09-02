@@ -225,10 +225,22 @@ def _collect_missing_tools() -> dict[str, str]:
     dependency missing for multiple pairs — e.g. soffice for both
     docx->pdf and the md->pdf chain — is only counted once), mapped to
     its ToolCheck kind ("tool" | "extra"). Shared by doctor() and
-    install_deps()."""
+    install_deps().
+
+    Raises RuntimeError for any other kind value — doctor()/install_deps()
+    both branch on exactly "tool"/"extra"; silently falling through to
+    neither branch (which an unvalidated typo would do) makes install-deps
+    exit 0 with no output at all, as if nothing were missing, while a real
+    dependency is unresolved. Loud failure here beats a silent no-op.
+    """
     missing: dict[str, str] = {}
     for converter_class in CONVERTER_REGISTRY.values():
         for bin_name, status, kind in converter_class().tool_checks():
+            if kind not in ("tool", "extra"):
+                raise RuntimeError(
+                    f"{converter_class.__name__}.tool_checks() returned an unrecognized "
+                    f"ToolCheck kind {kind!r} for {bin_name!r} — expected 'tool' or 'extra'"
+                )
             if not status.available:
                 missing.setdefault(bin_name, kind)
     return missing
@@ -293,9 +305,12 @@ def install_deps() -> None:
             "Run [bold]proteus doctor[/bold] to confirm."
         )
         _print_extras_hint(extras_missing)
-        if not succeeded:
-            raise typer.Exit(1)
-        return
+        # Exit non-zero whenever anything short of full success happened —
+        # not just when *everything* failed. A caller scripting
+        # `proteus install-deps && proteus doctor` must see partial
+        # failure as failure, not success just because something else
+        # also happened to succeed.
+        raise typer.Exit(1)
 
     console.print(
         f"[bold green]Installed {len(succeeded)} tool(s).[/bold green] "

@@ -99,6 +99,39 @@ def test_convert_raises_conversion_failed_for_invalid_image(tmp_path):
         PngToJpgConverter().convert(bad_file, tmp_path / "out.jpg", ConversionOptions())
 
 
+def test_convert_does_not_destroy_pre_existing_output_on_failure(tmp_path):
+    # Regression: Image.save() opens its target in "w+b" mode, truncating
+    # a pre-existing file to 0 bytes *before* encoding a single byte, and
+    # only cleans up on failure if the file didn't already exist. A
+    # pre-existing output_path must survive a failed conversion untouched.
+    bad_file = tmp_path / "not-an-image.png"
+    bad_file.write_bytes(b"this is not an image")
+
+    output_path = tmp_path / "out.jpg"
+    output_path.write_text("important pre-existing content")
+
+    with pytest.raises(ConversionFailedError):
+        PngToJpgConverter().convert(bad_file, output_path, ConversionOptions())
+
+    assert output_path.read_text() == "important pre-existing content"
+    assert list(tmp_path.glob(".proteus-tmp-*")) == []
+
+
+def test_cmyk_source_converts_to_jpeg_without_needing_to_flatten(tmp_path):
+    # Regression for the broadened _JPEG_SAFE_MODES set: CMYK is directly
+    # JPEG-savable per Pillow's own JpegImagePlugin.RAWMODE — must not
+    # raise, and shouldn't need the RGB-flatten path (unlike RGBA/LA/P).
+    cmyk_source = tmp_path / "cmyk.tif"
+    Image.new("CMYK", (10, 8), (0, 0, 0, 0)).save(cmyk_source, format="TIFF")
+
+    output_path = tmp_path / "out.jpg"
+    result = PngToJpgConverter().convert(cmyk_source, output_path, ConversionOptions())
+
+    assert result.output_path == output_path
+    with Image.open(output_path) as img:
+        assert img.format == "JPEG"
+
+
 def test_tool_checks_reports_resolved_path_when_pillow_available():
     checks = PngToJpgConverter().tool_checks()
     assert len(checks) == 1

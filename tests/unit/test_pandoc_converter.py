@@ -57,20 +57,29 @@ def test_docx_to_markdown_invokes_resolved_pandoc_path_with_correct_formats(monk
 
     def fake_run_subprocess(cmd, **kwargs):
         captured_cmd["cmd"] = cmd
-        output_path.write_text("# converted")
+        # pandoc writes to the -o argument, which is now a same-directory
+        # staging path, not output_path itself directly (see the
+        # atomic-write regression test below for why).
+        tmp_output = Path(cmd[cmd.index("-o") + 1])
+        tmp_output.write_text("# converted")
 
     monkeypatch.setattr(pandoc_module, "run_subprocess", fake_run_subprocess)
 
     result = DocxToMarkdownConverter().convert(input_path, output_path, ConversionOptions())
 
     assert result.output_path == output_path
+    assert output_path.read_text() == "# converted"
     cmd = captured_cmd["cmd"]
     # Regression: the resolved path from find_tool() is what gets
     # invoked, not the bare "pandoc" name.
     assert cmd[0] == str(resolved_path)
     assert "-f" in cmd and cmd[cmd.index("-f") + 1] == "docx"
     assert "-t" in cmd and cmd[cmd.index("-t") + 1] == "gfm"
-    assert str(output_path) in cmd
+    # -o points at a staging file in output_path's own directory, not
+    # output_path itself — confirms the atomic-write-via-rename setup.
+    staged = Path(cmd[cmd.index("-o") + 1])
+    assert staged.parent == output_path.parent
+    assert staged != output_path
     assert str(input_path) in cmd
 
 
@@ -85,13 +94,14 @@ def test_markdown_to_docx_invokes_pandoc_with_correct_formats(monkeypatch, tmp_p
 
     def fake_run_subprocess(cmd, **kwargs):
         captured_cmd["cmd"] = cmd
-        output_path.write_bytes(b"placeholder-docx")
+        Path(cmd[cmd.index("-o") + 1]).write_bytes(b"placeholder-docx")
 
     monkeypatch.setattr(pandoc_module, "run_subprocess", fake_run_subprocess)
 
     result = MarkdownToDocxConverter().convert(input_path, output_path, ConversionOptions())
 
     assert result.output_path == output_path
+    assert output_path.read_bytes() == b"placeholder-docx"
     cmd = captured_cmd["cmd"]
     assert cmd[cmd.index("-f") + 1] == "gfm"
     assert cmd[cmd.index("-t") + 1] == "docx"
@@ -108,3 +118,25 @@ def test_convert_raises_conversion_failed_if_output_missing(monkeypatch, tmp_pat
     converter = DocxToMarkdownConverter()
     with pytest.raises(ConversionFailedError):
         converter.convert(input_path, output_path, ConversionOptions())
+
+
+def test_convert_does_not_destroy_pre_existing_output_on_failure(monkeypatch, tmp_path):
+    # Regression: pandoc writes via -o straight into the real destination
+    # with no staging — if it fails partway through, a pre-existing file
+    # at output_path must survive untouched, not get truncated/destroyed
+    # before the failure is even known.
+    monkeypatch.setattr(pandoc_module, "find_tool", lambda *a, **k: _available())
+    monkeypatch.setattr(pandoc_module, "run_subprocess", lambda cmd, **kwargs: None)
+
+    input_path = tmp_path / "in.docx"
+    input_path.write_text("placeholder")
+    output_path = tmp_path / "out.md"
+    output_path.write_text("important pre-existing content")
+
+    converter = DocxToMarkdownConverter()
+    with pytest.raises(ConversionFailedError):
+        converter.convert(input_path, output_path, ConversionOptions())
+
+    assert output_path.read_text() == "important pre-existing content"
+    # No leftover staging file either.
+    assert list(tmp_path.glob(".proteus-tmp-*")) == []

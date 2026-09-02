@@ -10,6 +10,8 @@ pair and which Pandoc format names they are.
 
 from __future__ import annotations
 
+import os
+import uuid
 from pathlib import Path
 
 from proteus.core.converter import (
@@ -20,7 +22,7 @@ from proteus.core.converter import (
     ensure_output_created,
 )
 from proteus.core.dependencies import find_tool
-from proteus.core.errors import ConverterUnavailableError
+from proteus.core.errors import ConversionFailedError, ConverterUnavailableError
 from proteus.core.subprocess_utils import run_subprocess
 
 PANDOC_BIN = "pandoc"
@@ -51,20 +53,44 @@ class _PandocConverterBase(Converter):
                 f"{self.from_ext}->{self.to_ext}."
             )
 
-        run_subprocess(
-            [
-                str(status.path),
-                "-f",
-                self.pandoc_from_format,
-                "-t",
-                self.pandoc_to_format,
-                "-o",
-                str(output_path),
-                str(input_path),
-            ]
+        # Write to a temp file in output_path's own directory (same drive,
+        # so os.replace() below is atomic), not directly to output_path
+        # via pandoc's own -o: if pandoc fails partway through writing
+        # (crashed, disk full), a pre-existing file at output_path must
+        # not be destroyed/truncated before the failure is even known —
+        # same reasoning as converters/image.py's identical fix, applied
+        # here since pandoc's -o has the same direct-to-destination
+        # pattern LibreOffice deliberately avoids via its isolated outdir.
+        tmp_output = output_path.with_name(
+            f".proteus-tmp-{uuid.uuid4().hex}{output_path.suffix}"
         )
+        try:
+            run_subprocess(
+                [
+                    str(status.path),
+                    "-f",
+                    self.pandoc_from_format,
+                    "-t",
+                    self.pandoc_to_format,
+                    "-o",
+                    str(tmp_output),
+                    str(input_path),
+                ]
+            )
 
-        ensure_output_created(output_path, "pandoc")
+            ensure_output_created(tmp_output, "pandoc")
+
+            try:
+                os.replace(tmp_output, output_path)
+            except OSError as e:
+                raise ConversionFailedError(
+                    f"pandoc produced {tmp_output} but couldn't move it to "
+                    f"{output_path} (destination may be open elsewhere): {e}"
+                ) from e
+        except Exception:
+            tmp_output.unlink(missing_ok=True)
+            raise
+
         return ConversionResult(output_path=output_path)
 
 
