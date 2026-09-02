@@ -147,6 +147,104 @@ def test_doctor_prints_no_install_links_section_when_everything_available(monkey
     assert "Install missing tools" not in result.stdout
 
 
+def test_install_deps_reports_nothing_missing_when_all_available(monkeypatch):
+    monkeypatch.setattr(cli_module, "_collect_missing_tools", lambda: {})
+
+    result = runner.invoke(app, ["install-deps"])
+
+    assert result.exit_code == 0
+    assert "already installed" in result.stdout
+
+
+def test_install_deps_installs_missing_tools_via_winget(monkeypatch):
+    monkeypatch.setattr(cli_module, "_collect_missing_tools", lambda: {"soffice": None})
+    monkeypatch.setattr(cli_module.shutil, "which", lambda name: "C:/winget.exe")
+    monkeypatch.setattr(cli_module, "_install_via_winget", lambda package_id: True)
+
+    result = runner.invoke(app, ["install-deps"])
+
+    assert result.exit_code == 0
+    assert "Installed 1 tool(s)" in result.stdout
+    assert "TheDocumentFoundation.LibreOffice" in result.stdout
+
+
+def test_install_deps_reports_failure_when_winget_install_fails(monkeypatch):
+    monkeypatch.setattr(cli_module, "_collect_missing_tools", lambda: {"soffice": None})
+    monkeypatch.setattr(cli_module.shutil, "which", lambda name: "C:/winget.exe")
+    monkeypatch.setattr(cli_module, "_install_via_winget", lambda package_id: False)
+
+    result = runner.invoke(app, ["install-deps"])
+
+    assert result.exit_code == 1
+    assert "0 installed, 1 failed" in result.stdout
+
+
+def test_install_deps_errors_when_winget_missing(monkeypatch):
+    monkeypatch.setattr(cli_module, "_collect_missing_tools", lambda: {"soffice": None})
+    monkeypatch.setattr(cli_module.shutil, "which", lambda name: None)
+
+    result = runner.invoke(app, ["install-deps"])
+
+    assert result.exit_code == 1
+    assert "winget was not found" in result.output
+    assert "libreoffice.org" in result.output
+
+
+def test_install_deps_lists_manual_install_for_tool_without_winget_package(monkeypatch):
+    monkeypatch.setattr(cli_module, "_collect_missing_tools", lambda: {"some-tool": None})
+
+    result = runner.invoke(app, ["install-deps"])
+
+    # Nothing installable via winget at all, so the winget-presence check
+    # is skipped entirely and this falls straight to the manual-only list.
+    assert result.exit_code == 1
+    assert "No winget package for" in result.stdout
+    assert "some-tool" in result.stdout
+
+
+def test_doctor_hints_at_install_deps_when_a_winget_installable_tool_is_missing(monkeypatch):
+    from proteus.converters import libreoffice as libreoffice_module
+    from proteus.core.dependencies import AvailabilityStatus
+
+    monkeypatch.setattr(
+        libreoffice_module,
+        "find_tool",
+        lambda *a, **k: AvailabilityStatus(False, None, "not-found"),
+    )
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "proteus install-deps" in result.stdout.replace("\n", "")
+
+
+def test_install_via_winget_returns_true_on_success(monkeypatch):
+    captured_cmd = {}
+
+    class _FakeCompletedProcess:
+        returncode = 0
+
+    def fake_run(cmd, **kwargs):
+        captured_cmd["cmd"] = cmd
+        return _FakeCompletedProcess()
+
+    monkeypatch.setattr(cli_module.subprocess, "run", fake_run)
+
+    assert cli_module._install_via_winget("Some.Package") is True
+    assert captured_cmd["cmd"][:3] == ["winget", "install", "--id"]
+    assert "Some.Package" in captured_cmd["cmd"]
+    assert "--silent" in captured_cmd["cmd"]
+
+
+def test_install_via_winget_returns_false_on_nonzero_exit(monkeypatch):
+    class _FakeCompletedProcess:
+        returncode = 1
+
+    monkeypatch.setattr(cli_module.subprocess, "run", lambda cmd, **kwargs: _FakeCompletedProcess())
+
+    assert cli_module._install_via_winget("Some.Package") is False
+
+
 def test_convert_unregistered_pair_exits_nonzero(tmp_path):
     input_file = tmp_path / "in.txt"
     input_file.write_text("placeholder")

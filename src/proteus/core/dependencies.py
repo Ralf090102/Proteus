@@ -52,6 +52,16 @@ INSTALL_LINKS: dict[str, str] = {
     "pandoc": "https://pandoc.org/installing.html",
 }
 
+# winget package IDs for the tools above that have one — used by
+# `proteus install-deps` to automate what INSTALL_LINKS otherwise just
+# points the user at manually. Not every entry in INSTALL_LINKS needs a
+# match here (a tool with no winget package would only ever show up in
+# INSTALL_LINKS, install-deps falls back to listing it as manual-only).
+WINGET_PACKAGE_IDS: dict[str, str] = {
+    "soffice": "TheDocumentFoundation.LibreOffice",
+    "pandoc": "JohnMacFarlane.Pandoc",
+}
+
 
 def find_tool(bin_name: str, *, env_var: str | None = None) -> AvailabilityStatus:
     """Locate bin_name, trying an explicit override before falling back to

@@ -12,6 +12,8 @@ deletes the original file once conversion succeeds.
 from __future__ import annotations
 
 import ctypes
+import shutil
+import subprocess
 import sys
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
@@ -22,7 +24,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from proteus.core.converter import ConversionOptions, ToolCheck
-from proteus.core.dependencies import INSTALL_LINKS
+from proteus.core.dependencies import INSTALL_LINKS, WINGET_PACKAGE_IDS
 from proteus.core.errors import ProteusError
 from proteus.core.registry import CONVERTER_REGISTRY, get_converter
 from proteus.windows import context_menu
@@ -152,15 +154,6 @@ def doctor() -> None:
     table.add_column("Available")
     table.add_column("Details")
 
-    # Install links get printed separately below the table, not squeezed
-    # into a table cell — a long URL truncates with a "…" inside a narrow
-    # table column (confirmed: rich's default 80-col fallback width cuts
-    # every LibreOffice/Pandoc download link short), which would defeat
-    # the whole point of showing it. dict, not set, to preserve first-seen
-    # order without duplicates (a tool missing for multiple pairs, e.g.
-    # soffice for both docx->pdf and the md->pdf chain, is only listed once).
-    missing_tools: dict[str, None] = {}
-
     for (from_ext, to_ext), converter_class in sorted(CONVERTER_REGISTRY.items()):
         converter = converter_class()
         checks = converter.tool_checks()
@@ -170,10 +163,16 @@ def doctor() -> None:
             f"{from_ext} -> {to_ext}",
             converter_class.__name__,
             status,
-            _doctor_details(checks, missing_tools),
+            _doctor_details(checks),
         )
     console.print(table)
 
+    # Install links get printed separately below the table, not squeezed
+    # into a table cell — a long URL truncates with a "…" inside a narrow
+    # table column (confirmed: rich's default 80-col fallback width cuts
+    # every LibreOffice/Pandoc download link short), which would defeat
+    # the whole point of showing it.
+    missing_tools = _collect_missing_tools()
     if missing_tools:
         console.print()
         console.print("[bold yellow]Install missing tools:[/bold yellow]")
@@ -183,9 +182,14 @@ def doctor() -> None:
             if link:
                 line += f" — {link}"
             console.print(escape(line))
+        if any(bin_name in WINGET_PACKAGE_IDS for bin_name in missing_tools):
+            console.print()
+            console.print(
+                "Or run [bold]proteus install-deps[/bold] to install automatically via winget."
+            )
 
 
-def _doctor_details(checks: tuple[ToolCheck, ...], missing_tools: dict[str, None]) -> str:
+def _doctor_details(checks: tuple[ToolCheck, ...]) -> str:
     """Build doctor's Details cell for one converter: where each required
     tool was found, or a short "not found" flag — the full install link
     for anything missing goes in the separate list doctor() prints below
@@ -199,8 +203,107 @@ def _doctor_details(checks: tuple[ToolCheck, ...], missing_tools: dict[str, None
             parts.append(f"{bin_name}: {status.path}")
         else:
             parts.append(f"{bin_name}: not found")
-            missing_tools.setdefault(bin_name, None)
     return escape(" | ".join(parts))
+
+
+def _collect_missing_tools() -> dict[str, None]:
+    """Every distinct external-tool bin_name that's missing across all
+    registered converters, in first-seen order, deduped (a tool missing
+    for multiple pairs — e.g. soffice for both docx->pdf and the md->pdf
+    chain — is only counted once). Shared by doctor() and install_deps()."""
+    missing: dict[str, None] = {}
+    for converter_class in CONVERTER_REGISTRY.values():
+        for bin_name, status in converter_class().tool_checks():
+            if not status.available:
+                missing.setdefault(bin_name, None)
+    return missing
+
+
+@app.command(name="install-deps")
+def install_deps() -> None:
+    """Install missing external tools (LibreOffice, Pandoc) via winget."""
+    missing_tools = _collect_missing_tools()
+    if not missing_tools:
+        console.print("[bold green]Everything needed is already installed.[/bold green]")
+        return
+
+    installable = {
+        bin_name: WINGET_PACKAGE_IDS[bin_name]
+        for bin_name in missing_tools
+        if bin_name in WINGET_PACKAGE_IDS
+    }
+    not_installable = [bin_name for bin_name in missing_tools if bin_name not in installable]
+
+    if installable and shutil.which("winget") is None:
+        error_console.print(
+            "[bold red]Error:[/bold red] winget was not found on PATH. Install "
+            "'App Installer' from the Microsoft Store, or install these manually:"
+        )
+        for bin_name in missing_tools:
+            console.print(escape(_manual_install_line(bin_name)))
+        raise typer.Exit(1)
+
+    succeeded: list[str] = []
+    failed: list[str] = []
+    for bin_name, package_id in installable.items():
+        console.print(f"[bold]Installing {bin_name}[/bold] ({package_id}) via winget...")
+        if _install_via_winget(package_id):
+            console.print("[green]  done[/green]")
+            succeeded.append(bin_name)
+        else:
+            console.print(f"[red]  winget install failed for {bin_name}[/red]")
+            failed.append(bin_name)
+
+    if not_installable:
+        console.print()
+        console.print("[bold yellow]No winget package for:[/bold yellow]")
+        for bin_name in not_installable:
+            console.print(escape(_manual_install_line(bin_name)))
+
+    console.print()
+    if failed or not_installable:
+        console.print(
+            f"[bold yellow]{len(succeeded)} installed, {len(failed)} failed, "
+            f"{len(not_installable)} need manual install.[/bold yellow] "
+            "Run [bold]proteus doctor[/bold] to confirm."
+        )
+        if not succeeded:
+            raise typer.Exit(1)
+    else:
+        console.print(
+            f"[bold green]Installed {len(succeeded)} tool(s).[/bold green] "
+            "Run [bold]proteus doctor[/bold] to confirm."
+        )
+
+
+def _manual_install_line(bin_name: str) -> str:
+    link = INSTALL_LINKS.get(bin_name)
+    return f"  {bin_name} — {link}" if link else f"  {bin_name}"
+
+
+def _install_via_winget(package_id: str) -> bool:
+    """Run a silent winget install for one package.
+
+    Deliberately not run through core/subprocess_utils.run_subprocess():
+    that helper captures/suppresses output for a no-console context-menu
+    launch, but install-deps is CLI-only (never invoked from the context
+    menu) and its winget calls are foreground, user-triggered, and can be
+    a large download (LibreOffice) — letting winget's own progress output
+    stream straight to the console matters here.
+    """
+    result = subprocess.run(
+        [
+            "winget",
+            "install",
+            "--id",
+            package_id,
+            "--exact",
+            "--silent",
+            "--accept-package-agreements",
+            "--accept-source-agreements",
+        ]
+    )
+    return result.returncode == 0
 
 
 @app.command(name="install-context-menu")
