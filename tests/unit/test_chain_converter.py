@@ -11,6 +11,7 @@ from proteus.converters.chains import ChainConverter, MarkdownToPdfChainConverte
 from proteus.converters.libreoffice import LibreOfficeConverter
 from proteus.converters.pandoc import MarkdownToDocxConverter
 from proteus.core.converter import ConversionOptions, ConversionResult, Converter
+from proteus.core.errors import ConversionFailedError
 
 
 class _StepA(Converter):
@@ -96,6 +97,54 @@ def test_chain_propagates_a_mid_chain_step_failure(tmp_path):
 
     with pytest.raises(RuntimeError):
         _FailingChain().convert(input_path, tmp_path / "out.final", ConversionOptions())
+
+
+def test_chain_wraps_a_real_step_failure_with_step_context(tmp_path):
+    # Unlike _FailingStep above (a raw RuntimeError, used to prove generic
+    # exception propagation), real converters raise ProteusError per the
+    # documented contract — those should be wrapped so the message names
+    # which step/converter in the chain actually failed.
+    class _FailingProteusStep(Converter):
+        from_ext = "mid"
+        to_ext = "final"
+
+        def is_available(self) -> bool:
+            return True
+
+        def convert(
+            self, input_path: Path, output_path: Path, options: ConversionOptions
+        ) -> ConversionResult:
+            raise ConversionFailedError("underlying tool exploded")
+
+    class _FailingChain(ChainConverter):
+        from_ext = "fake"
+        to_ext = "final"
+        steps = (_StepA, _FailingProteusStep)
+
+    input_path = tmp_path / "in.fake"
+    input_path.write_text("original")
+
+    with pytest.raises(ConversionFailedError, match="step 2/2") as exc_info:
+        _FailingChain().convert(input_path, tmp_path / "out.final", ConversionOptions())
+
+    message = str(exc_info.value)
+    assert "_FailingProteusStep" in message
+    assert "underlying tool exploded" in message
+
+
+def test_chain_wraps_temp_dir_setup_failure(monkeypatch, tmp_path):
+    from proteus.converters import chains as chains_module
+
+    def raise_oserror(*args, **kwargs):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(chains_module.tempfile, "TemporaryDirectory", raise_oserror)
+
+    input_path = tmp_path / "in.fake"
+    input_path.write_text("original")
+
+    with pytest.raises(ConversionFailedError, match="temporary working directory"):
+        _TwoStepChain().convert(input_path, tmp_path / "out.final", ConversionOptions())
 
 
 def test_markdown_to_pdf_chain_availability_reflects_both_steps(monkeypatch):

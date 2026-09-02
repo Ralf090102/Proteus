@@ -42,6 +42,8 @@ def get_converter(
     isn't registered — an agent or user hitting this should be able to
     self-correct from the error message alone.
     """
+    from_ext = from_ext.lower()
+    to_ext = to_ext.lower()
     try:
         converter_class = registry[(from_ext, to_ext)]
     except KeyError:

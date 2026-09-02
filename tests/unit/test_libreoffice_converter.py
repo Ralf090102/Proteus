@@ -167,6 +167,67 @@ def test_convert_moves_output_via_shutil_move_not_path_replace(monkeypatch, tmp_
     assert move_calls[0][1] == str(output_path)
 
 
+def test_convert_finds_output_even_if_soffice_names_it_differently(monkeypatch, tmp_path):
+    # Regression: don't assume soffice's output basename exactly matches
+    # Path(input_path).stem. There's no guarantee soffice's own filename
+    # derivation matches pathlib's stem computation byte-for-byte for
+    # every possible unicode/space content in the input name — since
+    # --outdir is an isolated temp dir nothing else writes into, whatever
+    # single PDF lands there is the real output, regardless of its name.
+    monkeypatch.setattr(libreoffice_module, "find_tool", lambda *a, **k: _available())
+
+    input_path = tmp_path / "café résumé.docx"
+    input_path.write_text("placeholder")
+    output_path = tmp_path / "out.pdf"
+
+    def fake_run_subprocess(cmd, **kwargs):
+        outdir = Path(cmd[cmd.index("--outdir") + 1])
+        # Deliberately a different name than input_path.stem would predict.
+        (outdir / "differently-named.pdf").write_bytes(b"%PDF-fake")
+
+    monkeypatch.setattr(libreoffice_module, "run_subprocess", fake_run_subprocess)
+
+    result = LibreOfficeConverter().convert(input_path, output_path, ConversionOptions())
+
+    assert result.output_path == output_path
+    assert output_path.read_bytes() == b"%PDF-fake"
+
+
+def test_convert_raises_conversion_failed_if_multiple_pdfs_produced(monkeypatch, tmp_path):
+    monkeypatch.setattr(libreoffice_module, "find_tool", lambda *a, **k: _available())
+
+    input_path = tmp_path / "in.docx"
+    input_path.write_text("placeholder")
+    output_path = tmp_path / "out.pdf"
+
+    def fake_run_subprocess(cmd, **kwargs):
+        outdir = Path(cmd[cmd.index("--outdir") + 1])
+        (outdir / "in.pdf").write_bytes(b"%PDF-fake-1")
+        (outdir / "stray.pdf").write_bytes(b"%PDF-fake-2")
+
+    monkeypatch.setattr(libreoffice_module, "run_subprocess", fake_run_subprocess)
+
+    with pytest.raises(ConversionFailedError, match="expected exactly 1"):
+        LibreOfficeConverter().convert(input_path, output_path, ConversionOptions())
+
+
+def test_convert_wraps_temp_dir_setup_failure(monkeypatch, tmp_path):
+    # Disk-full / permission-denied creating the staging dir itself must
+    # surface as a ProteusError, not a raw OSError escaping convert().
+    monkeypatch.setattr(libreoffice_module, "find_tool", lambda *a, **k: _available())
+
+    def raise_oserror(*args, **kwargs):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(libreoffice_module.tempfile, "TemporaryDirectory", raise_oserror)
+
+    input_path = tmp_path / "in.docx"
+    input_path.write_text("placeholder")
+
+    with pytest.raises(ConversionFailedError, match="temporary working directory"):
+        LibreOfficeConverter().convert(input_path, tmp_path / "out.pdf", ConversionOptions())
+
+
 def test_convert_raises_conversion_failed_when_rename_fails(monkeypatch, tmp_path):
     # Regression: a locked destination (e.g. open in a PDF viewer) must
     # surface as a ProteusError, not a bare PermissionError.

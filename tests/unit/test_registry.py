@@ -68,3 +68,14 @@ def test_get_converter_against_real_registry_constructs_libreoffice_converter():
 def test_get_converter_against_real_registry_unknown_pair_raises():
     with pytest.raises(UnknownConversionError):
         get_converter("txt", "pdf")
+
+
+def test_get_converter_normalizes_casing(fake_converter):
+    # converter.py's own docstring says extensions are "normalized once
+    # at the CLI/registry boundary" — get_converter() should hold that
+    # invariant itself rather than trusting every caller to lowercase
+    # first, so a direct/library caller bypassing the CLI still resolves.
+    fake_class = type(fake_converter)
+    registry = {(fake_class.from_ext, fake_class.to_ext): fake_class}
+    converter = get_converter("FAKE", "FAKE2", registry=registry)
+    assert isinstance(converter, fake_class)

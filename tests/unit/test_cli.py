@@ -3,6 +3,8 @@ conversion fidelity (that's the manual check / integration test)."""
 
 from __future__ import annotations
 
+import ctypes
+import sys
 from pathlib import Path
 
 import pytest
@@ -350,6 +352,62 @@ def test_convert_replace_source_delete_failure_warns_but_does_not_fail_command(
     assert result.exit_code == 0
     assert "Warning" in result.output
     assert "in use" in result.output
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="real file-lock semantics are Windows-specific")
+def test_convert_replace_source_delete_failure_with_a_real_locked_file(monkeypatch, tmp_path):
+    # Regression for the two mocked-OSError tests above (both monkeypatch
+    # Path.unlink to unconditionally throw): reproduce a genuine OS-level
+    # lock instead. dwShareMode=0 denies all sharing, including delete —
+    # unlike plain open()/os.open(), which normally allow delete-while-
+    # open on Windows — so this is real "file open in another program"
+    # semantics, not a synthetic mock.
+    from ctypes import wintypes
+
+    input_file = tmp_path / "in.docx"
+    input_file.write_text("placeholder")
+    output_path = tmp_path / "in.pdf"
+
+    class _FakeConverter:
+        def convert(self, input_path, out_path, options):
+            from proteus.core.converter import ConversionResult
+
+            output_path.write_bytes(b"%PDF-fake")
+            return ConversionResult(output_path=output_path)
+
+    monkeypatch.setattr(cli_module, "get_converter", lambda *a, **k: _FakeConverter())
+
+    create_file_w = ctypes.windll.kernel32.CreateFileW
+    create_file_w.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file_w.restype = wintypes.HANDLE
+    close_handle = ctypes.windll.kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+
+    generic_read = 0x80000000
+    open_existing = 3
+    invalid_handle_value = wintypes.HANDLE(-1).value
+
+    handle = create_file_w(str(input_file), generic_read, 0, None, open_existing, 0, None)
+    assert handle != invalid_handle_value, "failed to open the test file with no sharing"
+
+    try:
+        result = runner.invoke(
+            app, ["convert", str(input_file), "--to", "pdf", "--replace-source"]
+        )
+
+        assert result.exit_code == 0
+        assert "Warning" in result.output
+        assert input_file.exists()  # the real lock genuinely prevented deletion
+    finally:
+        close_handle(handle)
 
 
 def test_convert_replace_source_delete_failure_from_context_menu_shows_message_box(

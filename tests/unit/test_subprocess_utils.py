@@ -37,6 +37,23 @@ def test_run_subprocess_raises_converter_unavailable_on_missing_binary():
         run_subprocess(["definitely-not-a-real-binary-xyz"])
 
 
+def test_run_subprocess_tolerates_non_utf8_output():
+    # text=True decodes stdout/stderr; without an explicit encoding this
+    # falls back to locale.getpreferredencoding(), which can raise
+    # UnicodeDecodeError on non-ASCII output in the wrong codepage — that
+    # would escape run_subprocess as a raw exception, breaking the
+    # "converters only raise ProteusError" contract. errors="replace"
+    # means decoding never raises, even for genuinely invalid bytes.
+    result = run_subprocess(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write(b'\\xff\\xfe not valid utf-8')",
+        ]
+    )
+    assert result.returncode == 0
+
+
 def test_isolated_libreoffice_profile_yields_file_uri_arg_and_cleans_up():
     with isolated_libreoffice_profile() as arg:
         assert arg.startswith("-env:UserInstallation=file:")

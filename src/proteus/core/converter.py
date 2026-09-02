@@ -53,6 +53,10 @@ def ensure_output_created(output_path: Path, backend_name: str) -> None:
         raise ConversionFailedError(
             f"{backend_name} reported success but {output_path} wasn't created"
         )
+    if output_path.stat().st_size == 0:
+        raise ConversionFailedError(
+            f"{backend_name} reported success but {output_path} is empty"
+        )
 
 
 class ToolCheck(NamedTuple):
