@@ -23,7 +23,8 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from proteus.converters.image import PILLOW_INSTALL_HINT
+from proteus.converters.image import PILLOW_EXTRA_NAME, PILLOW_INSTALL_HINT
+from proteus.converters.pdf_extract import PYMUPDF4LLM_EXTRA_NAME, PYMUPDF4LLM_INSTALL_HINT
 from proteus.core.converter import ConversionOptions, ToolCheck
 from proteus.core.dependencies import INSTALL_LINKS, WINGET_PACKAGE_IDS
 from proteus.core.errors import ProteusError
@@ -38,6 +39,17 @@ app = typer.Typer(
 
 console = Console()
 error_console = Console(stderr=True)
+
+# Every ToolCheck kind="extra" bin_name mapped to its `uv tool install`
+# hint — one entry per optional Python extra, sourced from that extra's
+# own converter module so the hint text has exactly one home. Doctor's
+# missing-tool list and install-deps' extras summary both key off this
+# instead of hardcoding a single extra's hint, which only ever worked
+# by accident while Pillow was the only optional extra that existed.
+EXTRA_INSTALL_HINTS: dict[str, str] = {
+    PILLOW_EXTRA_NAME: PILLOW_INSTALL_HINT,
+    PYMUPDF4LLM_EXTRA_NAME: PYMUPDF4LLM_INSTALL_HINT,
+}
 
 _MB_ICONERROR = 0x10
 _MB_ICONWARNING = 0x30
@@ -195,7 +207,8 @@ def _missing_tool_line(bin_name: str, kind: str) -> str:
     `uv tool install` command; an external tool (kind="tool") uses
     INSTALL_LINKS same as always."""
     if kind == "extra":
-        return f"  {bin_name} — optional extra not installed, run: {PILLOW_INSTALL_HINT}"
+        hint = EXTRA_INSTALL_HINTS.get(bin_name, "<no install hint registered>")
+        return f"  {bin_name} — optional extra not installed, run: {hint}"
     return _manual_install_line(bin_name)
 
 
@@ -328,7 +341,8 @@ def _print_extras_hint(extras_missing: list[str]) -> None:
     console.print()
     console.print("[bold yellow]Optional extras not installed:[/bold yellow]")
     for bin_name in extras_missing:
-        console.print(escape(f"  {bin_name} — run: {PILLOW_INSTALL_HINT}"))
+        hint = EXTRA_INSTALL_HINTS.get(bin_name, "<no install hint registered>")
+        console.print(escape(f"  {bin_name} — run: {hint}"))
 
 
 def _manual_install_line(bin_name: str) -> str:

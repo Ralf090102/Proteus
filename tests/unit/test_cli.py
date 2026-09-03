@@ -144,13 +144,17 @@ def test_doctor_prints_no_install_links_section_when_everything_available(monkey
     monkeypatch.setattr(pandoc_module, "find_tool", lambda *a, **k: available)
     monkeypatch.setattr(libreoffice_module, "find_tool", lambda *a, **k: available)
 
-    # Pillow (the `images` extra, backing the png/jpg/webp pairs) may or
-    # may not actually be installed in the environment running this test —
-    # stub it present so "everything available" genuinely means everything,
-    # independent of whether the optional extra happens to be installed.
+    # Pillow (the `images` extra, backing png/jpg/webp) and pymupdf4llm
+    # (the `markdown` extra, backing pdf->md) may or may not actually be
+    # installed in the environment running this test — stub both present
+    # so "everything available" genuinely means everything, independent of
+    # whether either optional extra happens to be installed.
     fake_pil = types.ModuleType("PIL")
     fake_pil.__file__ = "C:/fake-site-packages/PIL/__init__.py"
     monkeypatch.setitem(sys.modules, "PIL", fake_pil)
+    fake_pymupdf4llm = types.ModuleType("pymupdf4llm")
+    fake_pymupdf4llm.__file__ = "C:/fake-site-packages/pymupdf4llm/__init__.py"
+    monkeypatch.setitem(sys.modules, "pymupdf4llm", fake_pymupdf4llm)
 
     result = runner.invoke(app, ["doctor"])
 
@@ -292,6 +296,25 @@ def test_install_deps_reports_both_missing_tool_and_missing_extra(monkeypatch):
     assert "Installed 1 tool(s)" in result.stdout
     assert "Optional extras not installed" in result.stdout
     assert "pillow" in result.stdout
+
+
+def test_install_deps_reports_distinct_hints_for_two_different_missing_extras(monkeypatch):
+    # Regression: doctor()/install_deps() used to hardcode PILLOW_INSTALL_HINT
+    # for every kind="extra" dependency — harmless while Pillow was the only
+    # extra, but a second one (pymupdf4llm) would print the wrong install
+    # command for it. Each extra must get its own hint from
+    # EXTRA_INSTALL_HINTS, not always Pillow's.
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_missing_tools",
+        lambda: {"pillow": "extra", "pymupdf4llm": "extra"},
+    )
+
+    result = runner.invoke(app, ["install-deps"])
+
+    assert result.exit_code == 0
+    assert "uv tool install .[images]" in result.stdout
+    assert "uv tool install .[markdown]" in result.stdout
 
 
 def test_doctor_hints_at_install_deps_when_a_winget_installable_tool_is_missing(monkeypatch):

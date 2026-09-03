@@ -44,6 +44,15 @@ dev = [
 images = [
     "Pillow>=10",
 ]
+# pdf->md conversion (converters/pdf_extract.py:PdfToMarkdownConverter) —
+# deliberately optional, not a base dependency, unlike pdf2docx/pymupdf:
+# pymupdf4llm pulls in a much heavier transitive footprint (an ONNX layout
+# model + onnxruntime + networkx, ~55MB) for a feature whose value is a
+# spike judgment call, not a core-pair certainty. Install via
+# `uv tool install .[markdown]`.
+markdown = [
+    "pymupdf4llm>=1.0",
+]
 
 [dependency-groups]
 dev = [

@@ -8,8 +8,13 @@ through local tools (Pandoc, LibreOffice) or in-process libraries.
 
 All v1 conversion pairs work end to end (`docx→pdf`, `docx↔md`, `md→pdf`, `pdf→docx`,
 `pdf→txt`), and the Windows right-click context-menu layer (`windows/context_menu.py`,
-`install-context-menu`/`uninstall-context-menu`) is built and installable. Remaining: Phase 7
-polish (richer `doctor` output, install-links for missing tools, packaging notes).
+`install-context-menu`/`uninstall-context-menu`) is built and installable. v2 additions: bug
+sweep, `install-deps` (winget-based), `png↔jpg`/`webp↔jpg/png` (optional `images` extra),
+`pptx→pdf`/`ppt→pdf` (LibreOffice, reusing the same backend as `docx→pdf`), and `pdf→md`
+(`pymupdf4llm`, optional `markdown` extra — a feasibility spike that cleared its quality bar
+against a 400+ page real-world document and a two-column academic paper, no dropped content,
+correct multi-column reading order, dense multi-line tables converting to real markdown grid
+syntax).
 
 ## Architecture
 
@@ -43,11 +48,20 @@ pair is a small `Converter` implementation registered under a `(from_ext, to_ext
 `docx→pdf` (LibreOffice headless), `docx→md` / `md→docx` (Pandoc), `md→pdf` (Pandoc then
 LibreOffice, chained), `pdf→docx` (`pdf2docx`), `pdf→txt` (PyMuPDF).
 
+## v2 additions
+
+`png↔jpg` / `webp↔jpg/png` (Pillow, optional `images` extra), `pptx→pdf` / `ppt→pdf`
+(LibreOffice headless — same `LibreOfficeConverter` backend as `docx→pdf`; two thin subclasses,
+`PptxToPdfConverter`/`PptToPdfConverter`, exist only to give the "tool not found" error message
+the right pair name), `pdf→md` (`pymupdf4llm`, optional `markdown` extra — a much heavier
+transitive install than Pillow, an ONNX layout model + onnxruntime + networkx, hence optional
+rather than joining `pdf2docx`/`pymupdf` as a hard dependency).
+
 ## Explicitly deferred (not forgotten)
 
-pptx/xlsx conversions, OCR / scanned-PDF text, batch/folder conversion, any GUI or web UI,
-packaging beyond `uv tool install`, vendoring Pandoc/LibreOffice. Don't build these
-speculatively — the registry design keeps them cheap to add when actually needed.
+xlsx conversions, OCR / scanned-PDF text, batch/folder conversion, any GUI or web UI, packaging
+beyond `uv tool install`, vendoring Pandoc/LibreOffice. Don't build these speculatively — the
+registry design keeps them cheap to add when actually needed.
 
 ## Development
 

@@ -1,9 +1,21 @@
-"""LibreOffice-headless-backed converter: docx -> pdf.
+"""LibreOffice-headless-backed converters: docx -> pdf, pptx -> pdf,
+ppt -> pdf.
 
 Shells out to `soffice --headless --convert-to pdf --outdir <dir> <input>`
 inside a fresh, isolated user profile per call (see
 core/subprocess_utils.isolated_libreoffice_profile) to avoid profile-lock
 contention if multiple calls happen back to back.
+
+convert()/is_available()/tool_checks() have no format-specific logic
+beyond the "--convert-to pdf" target — the same soffice invocation
+handles docx, pptx, and legacy binary ppt sources identically (confirmed
+against real LibreOffice for all three). PptxToPdfConverter/
+PptToPdfConverter subclass LibreOfficeConverter purely to override
+from_ext/to_ext, same pattern as converters/image.py's per-pair Pillow
+subclasses — those two attributes are used in exactly one place
+(convert()'s "not found" error message), but leaving them at their
+inherited docx/pdf default would make that message say "Install it to
+convert docx->pdf" for a pptx/ppt conversion, which is wrong.
 """
 
 from __future__ import annotations
@@ -119,3 +131,13 @@ class LibreOfficeConverter(Converter):
             ) from e
 
         return ConversionResult(output_path=output_path)
+
+
+class PptxToPdfConverter(LibreOfficeConverter):
+    from_ext = "pptx"
+    to_ext = "pdf"
+
+
+class PptToPdfConverter(LibreOfficeConverter):
+    from_ext = "ppt"
+    to_ext = "pdf"

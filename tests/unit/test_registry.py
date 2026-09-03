@@ -13,15 +13,31 @@ from proteus.converters.image import (
     WebpToJpgConverter,
     WebpToPngConverter,
 )
-from proteus.converters.libreoffice import LibreOfficeConverter
+from proteus.converters.libreoffice import (
+    LibreOfficeConverter,
+    PptToPdfConverter,
+    PptxToPdfConverter,
+)
 from proteus.converters.pandoc import DocxToMarkdownConverter, MarkdownToDocxConverter
-from proteus.converters.pdf_extract import Pdf2DocxConverter, PyMuPdfTextExtractConverter
+from proteus.converters.pdf_extract import (
+    Pdf2DocxConverter,
+    PdfToMarkdownConverter,
+    PyMuPdfTextExtractConverter,
+)
 from proteus.core.errors import UnknownConversionError
 from proteus.core.registry import CONVERTER_REGISTRY, get_converter
 
 
 def test_docx_to_pdf_registered_to_libreoffice_converter():
     assert CONVERTER_REGISTRY[("docx", "pdf")] is LibreOfficeConverter
+
+
+def test_pptx_to_pdf_registered_to_pptx_converter():
+    assert CONVERTER_REGISTRY[("pptx", "pdf")] is PptxToPdfConverter
+
+
+def test_ppt_to_pdf_registered_to_ppt_converter():
+    assert CONVERTER_REGISTRY[("ppt", "pdf")] is PptToPdfConverter
 
 
 def test_docx_to_md_registered_to_pandoc_converter():
@@ -42,6 +58,10 @@ def test_pdf_to_docx_registered_to_pdf2docx_converter():
 
 def test_pdf_to_txt_registered_to_pymupdf_converter():
     assert CONVERTER_REGISTRY[("pdf", "txt")] is PyMuPdfTextExtractConverter
+
+
+def test_pdf_to_md_registered_to_pdf_to_markdown_converter():
+    assert CONVERTER_REGISTRY[("pdf", "md")] is PdfToMarkdownConverter
 
 
 def test_png_to_jpg_registered_to_image_converter():

@@ -6,7 +6,8 @@ This module only knows about extension-pair tuples and the Converter
 class each one maps to; it has zero knowledge of the CLI or any specific
 backend.
 
-Adding a later pair (e.g. pptx->pdf) is a one-line addition, not a
+Adding a later pair reusing an existing backend (pptx->pdf/ppt->pdf via
+LibreOfficeConverter were exactly this) is a one-line addition, not a
 redesign.
 """
 
@@ -23,19 +24,37 @@ from proteus.converters.image import (
     WebpToJpgConverter,
     WebpToPngConverter,
 )
-from proteus.converters.libreoffice import LibreOfficeConverter
+from proteus.converters.libreoffice import (
+    LibreOfficeConverter,
+    PptToPdfConverter,
+    PptxToPdfConverter,
+)
 from proteus.converters.pandoc import DocxToMarkdownConverter, MarkdownToDocxConverter
-from proteus.converters.pdf_extract import Pdf2DocxConverter, PyMuPdfTextExtractConverter
+from proteus.converters.pdf_extract import (
+    Pdf2DocxConverter,
+    PdfToMarkdownConverter,
+    PyMuPdfTextExtractConverter,
+)
 from proteus.core.converter import Converter
 from proteus.core.errors import UnknownConversionError
 
 CONVERTER_REGISTRY: dict[tuple[str, str], type[Converter]] = {
     ("docx", "pdf"): LibreOfficeConverter,
+    ("pptx", "pdf"): PptxToPdfConverter,
+    # No dedicated fixture/integration test for legacy .ppt: a real
+    # binary .ppt fixture is ~640KB (vs. every other fixture's low tens
+    # of KB, or less) for content identical to sample.pptx — manually
+    # verified against real LibreOffice instead (converts cleanly, same
+    # LibreOfficeConverter.convert() as pptx/docx, which is provably
+    # format-agnostic — see converters/libreoffice.py). Regression
+    # coverage is the registry-resolution unit test only.
+    ("ppt", "pdf"): PptToPdfConverter,
     ("docx", "md"): DocxToMarkdownConverter,
     ("md", "docx"): MarkdownToDocxConverter,
     ("md", "pdf"): MarkdownToPdfChainConverter,
     ("pdf", "docx"): Pdf2DocxConverter,
     ("pdf", "txt"): PyMuPdfTextExtractConverter,
+    ("pdf", "md"): PdfToMarkdownConverter,
     ("png", "jpg"): PngToJpgConverter,
     ("jpg", "png"): JpgToPngConverter,
     ("webp", "jpg"): WebpToJpgConverter,

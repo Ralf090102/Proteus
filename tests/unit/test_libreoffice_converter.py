@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 
 from proteus.converters import libreoffice as libreoffice_module
-from proteus.converters.libreoffice import SOFFICE_BIN, LibreOfficeConverter
+from proteus.converters.libreoffice import (
+    SOFFICE_BIN,
+    LibreOfficeConverter,
+    PptToPdfConverter,
+    PptxToPdfConverter,
+)
 from proteus.core.converter import ConversionOptions, ToolCheck
 from proteus.core.dependencies import AvailabilityStatus
 from proteus.core.errors import ConversionFailedError, ConverterUnavailableError
@@ -43,6 +48,27 @@ def test_convert_raises_converter_unavailable_when_soffice_missing(monkeypatch, 
     converter = LibreOfficeConverter()
     with pytest.raises(ConverterUnavailableError):
         converter.convert(tmp_path / "in.docx", tmp_path / "out.pdf", ConversionOptions())
+
+
+@pytest.mark.parametrize(
+    "converter_class,expected_pair",
+    [
+        (LibreOfficeConverter, "docx->pdf"),
+        (PptxToPdfConverter, "pptx->pdf"),
+        (PptToPdfConverter, "ppt->pdf"),
+    ],
+)
+def test_convert_unavailable_error_names_the_actual_pair(
+    monkeypatch, tmp_path, converter_class, expected_pair
+):
+    # Regression: PptxToPdfConverter/PptToPdfConverter subclass
+    # LibreOfficeConverter purely to override from_ext/to_ext — this is
+    # the one place that distinction is actually used (the "not found"
+    # message), so it must reflect the real pair being attempted, not
+    # LibreOfficeConverter's own docx/pdf default.
+    monkeypatch.setattr(libreoffice_module, "find_tool", lambda *a, **k: _unavailable())
+    with pytest.raises(ConverterUnavailableError, match=expected_pair):
+        converter_class().convert(tmp_path / "in", tmp_path / "out.pdf", ConversionOptions())
 
 
 def test_convert_invokes_resolved_soffice_path_and_renames_output(monkeypatch, tmp_path):

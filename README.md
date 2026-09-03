@@ -9,7 +9,8 @@ machine.
 v1 is done. All conversion pairs work end to end (`docx→pdf`, `docx↔md`, `md→pdf`, `pdf→docx`,
 `pdf→txt`), the Windows right-click context-menu layer is built and installable (with a
 "Replace Original" variant per pair, and no console/Explorer-window flash — see below), and
-`doctor` reports exactly what's missing and where to get it.
+`doctor` reports exactly what's missing and where to get it. v2 has added `png↔jpg`/
+`webp↔jpg/png`, `pptx→pdf`/`ppt→pdf`, and `pdf→md` — see below.
 
 ## Why
 
@@ -28,19 +29,33 @@ install once): Pandoc and LibreOffice.
 | `pdf → docx` | `pdf2docx` |
 | `pdf → txt` | PyMuPDF |
 
+## v2 additions
+
+| Pair | Backend |
+|---|---|
+| `png ↔ jpg`, `webp ↔ jpg/png` | Pillow (optional `images` extra — `uv tool install .[images]`) |
+| `pptx → pdf`, `ppt → pdf` | LibreOffice headless — same backend as `docx → pdf` |
+| `pdf → md` | `pymupdf4llm` (optional `markdown` extra — `uv tool install .[markdown]`) |
+
 ## Adding a new format pair
 
 Every pair is one entry in a hand-maintained registry (`src/proteus/core/registry.py`) — a
 `dict[tuple[from_ext, to_ext], type[Converter]]` — so adding one that reuses an existing backend
-is a two-line change, not a redesign. `pptx → pdf`, for example, needs nothing new: LibreOffice
-headless already handles `.pptx` natively, so it's the same `LibreOfficeConverter` the
-`docx → pdf` pair already uses:
+is a two-line change, not a redesign. `xlsx → pdf`, for example, needs nothing new: LibreOffice
+headless already handles `.xlsx` natively, the same way it handles `.docx`/`.pptx` today — just a
+thin `Converter` subclass to give it the right pair name (see `converters/libreoffice.py`'s
+`PptxToPdfConverter`/`PptToPdfConverter` for the pattern) plus a registry line:
 
 ```python
+# src/proteus/converters/libreoffice.py
+class XlsxToPdfConverter(LibreOfficeConverter):
+    from_ext = "xlsx"
+    to_ext = "pdf"
+
 # src/proteus/core/registry.py
 CONVERTER_REGISTRY: dict[tuple[str, str], type[Converter]] = {
     ...
-    ("pptx", "pdf"): LibreOfficeConverter,  # new line
+    ("xlsx", "pdf"): XlsxToPdfConverter,  # new line
 }
 ```
 
