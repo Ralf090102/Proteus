@@ -1,4 +1,5 @@
-"""Pillow-backed image-format converter: png<->jpg, webp<->jpg/png.
+"""Pillow-backed image-format converter: png<->jpg, webp<->jpg/png,
+png/jpg/webp -> pdf.
 
 Unlike converters/pdf_extract.py's hard dependencies (pdf2docx, PyMuPDF),
 Pillow is a genuinely optional install — the `images` extra in
@@ -34,7 +35,14 @@ PILLOW_INSTALL_HINT = "uv tool install .[images]"
 
 # Pillow's format names differ from bare extensions for jpg specifically
 # (Image.save(format=...) expects "JPEG", not "JPG"); png/webp match.
-_PILLOW_FORMAT = {"jpg": "JPEG", "png": "PNG", "webp": "WEBP"}
+_PILLOW_FORMAT = {"jpg": "JPEG", "png": "PNG", "webp": "WEBP", "pdf": "PDF"}
+
+# Pillow's PDF writer treats 1 source pixel as 1 PDF point (72dpi) unless
+# given an explicit resolution= — confirmed directly: a 40x30px image
+# produced a 40x30-*point* PDF page, which for a typical multi-thousand-
+# pixel photo/scan means an absurdly oversized "page". Used only as a
+# fallback below, when the source has no embedded DPI of its own.
+DEFAULT_PDF_DPI = 96.0
 
 # Every Pillow image mode the JPEG plugin can save directly (Pillow's own
 # JpegImagePlugin.RAWMODE) — anything else, not just the alpha-bearing
@@ -93,10 +101,21 @@ class PillowConverter(Converter):
         try:
             try:
                 target_format = _PILLOW_FORMAT[self.to_ext]
+                save_kwargs: dict[str, object] = {}
                 with Image.open(input_path) as img:
                     if target_format == "JPEG" and img.mode not in _JPEG_SAFE_MODES:
                         img = img.convert("RGB")
-                    img.save(tmp_output, format=target_format)
+                    if target_format == "PDF":
+                        # Honor the source's own embedded DPI when present
+                        # (common for real scanner output — the page then
+                        # matches the image's intended physical size);
+                        # otherwise fall back to DEFAULT_PDF_DPI rather
+                        # than Pillow's implicit 72dpi. No mode-flattening
+                        # needed here — confirmed directly against RGBA,
+                        # L, P, CMYK, and 1-bit sources, unlike JPEG above.
+                        source_dpi = img.info.get("dpi")
+                        save_kwargs["resolution"] = source_dpi[0] if source_dpi else DEFAULT_PDF_DPI
+                    img.save(tmp_output, format=target_format, **save_kwargs)
             except Exception as e:
                 raise ConversionFailedError(f"Pillow failed to convert {input_path}: {e}") from e
 
@@ -144,3 +163,18 @@ class JpgToWebpConverter(PillowConverter):
 class PngToWebpConverter(PillowConverter):
     from_ext = "png"
     to_ext = "webp"
+
+
+class PngToPdfConverter(PillowConverter):
+    from_ext = "png"
+    to_ext = "pdf"
+
+
+class JpgToPdfConverter(PillowConverter):
+    from_ext = "jpg"
+    to_ext = "pdf"
+
+
+class WebpToPdfConverter(PillowConverter):
+    from_ext = "webp"
+    to_ext = "pdf"

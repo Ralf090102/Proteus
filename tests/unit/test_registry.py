@@ -6,11 +6,14 @@ import pytest
 
 from proteus.converters.chains import MarkdownToPdfChainConverter
 from proteus.converters.image import (
+    JpgToPdfConverter,
     JpgToPngConverter,
     JpgToWebpConverter,
     PngToJpgConverter,
+    PngToPdfConverter,
     PngToWebpConverter,
     WebpToJpgConverter,
+    WebpToPdfConverter,
     WebpToPngConverter,
 )
 from proteus.converters.libreoffice import (
@@ -86,6 +89,18 @@ def test_jpg_to_webp_registered_to_image_converter():
 
 def test_png_to_webp_registered_to_image_converter():
     assert CONVERTER_REGISTRY[("png", "webp")] is PngToWebpConverter
+
+
+def test_png_to_pdf_registered_to_image_converter():
+    assert CONVERTER_REGISTRY[("png", "pdf")] is PngToPdfConverter
+
+
+def test_jpg_to_pdf_registered_to_image_converter():
+    assert CONVERTER_REGISTRY[("jpg", "pdf")] is JpgToPdfConverter
+
+
+def test_webp_to_pdf_registered_to_image_converter():
+    assert CONVERTER_REGISTRY[("webp", "pdf")] is WebpToPdfConverter
 
 
 def test_get_converter_known_pair_constructs_instance(fake_converter):

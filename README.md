@@ -10,7 +10,7 @@ v1 is done. All conversion pairs work end to end (`docx→pdf`, `docx↔md`, `md
 `pdf→txt`), the Windows right-click context-menu layer is built and installable (with a
 "Replace Original" variant per pair, and no console/Explorer-window flash — see below), and
 `doctor` reports exactly what's missing and where to get it. v2 has added `png↔jpg`/
-`webp↔jpg/png`, `pptx→pdf`/`ppt→pdf`, and `pdf→md` — see below.
+`webp↔jpg/png`, `pptx→pdf`/`ppt→pdf`, `pdf→md`, and `png/jpg/webp→pdf` — see below.
 
 ## Why
 
@@ -36,6 +36,7 @@ install once): Pandoc and LibreOffice.
 | `png ↔ jpg`, `webp ↔ jpg/png` | Pillow (optional `images` extra — `uv tool install .[images]`) |
 | `pptx → pdf`, `ppt → pdf` | LibreOffice headless — same backend as `docx → pdf` |
 | `pdf → md` | `pymupdf4llm` (optional `markdown` extra — `uv tool install .[markdown]`) |
+| `png/jpg/webp → pdf` | Pillow — same `images` extra as the other image pairs |
 
 ## Adding a new format pair
 

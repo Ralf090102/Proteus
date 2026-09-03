@@ -17,11 +17,14 @@ from collections.abc import Mapping
 
 from proteus.converters.chains import MarkdownToPdfChainConverter
 from proteus.converters.image import (
+    JpgToPdfConverter,
     JpgToPngConverter,
     JpgToWebpConverter,
     PngToJpgConverter,
+    PngToPdfConverter,
     PngToWebpConverter,
     WebpToJpgConverter,
+    WebpToPdfConverter,
     WebpToPngConverter,
 )
 from proteus.converters.libreoffice import (
@@ -61,6 +64,9 @@ CONVERTER_REGISTRY: dict[tuple[str, str], type[Converter]] = {
     ("webp", "png"): WebpToPngConverter,
     ("jpg", "webp"): JpgToWebpConverter,
     ("png", "webp"): PngToWebpConverter,
+    ("png", "pdf"): PngToPdfConverter,
+    ("jpg", "pdf"): JpgToPdfConverter,
+    ("webp", "pdf"): WebpToPdfConverter,
 }
 
 

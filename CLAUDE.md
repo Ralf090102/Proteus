@@ -10,11 +10,13 @@ All v1 conversion pairs work end to end (`docx→pdf`, `docx↔md`, `md→pdf`, 
 `pdf→txt`), and the Windows right-click context-menu layer (`windows/context_menu.py`,
 `install-context-menu`/`uninstall-context-menu`) is built and installable. v2 additions: bug
 sweep, `install-deps` (winget-based), `png↔jpg`/`webp↔jpg/png` (optional `images` extra),
-`pptx→pdf`/`ppt→pdf` (LibreOffice, reusing the same backend as `docx→pdf`), and `pdf→md`
+`pptx→pdf`/`ppt→pdf` (LibreOffice, reusing the same backend as `docx→pdf`), `pdf→md`
 (`pymupdf4llm`, optional `markdown` extra — a feasibility spike that cleared its quality bar
 against a 400+ page real-world document and a two-column academic paper, no dropped content,
 correct multi-column reading order, dense multi-line tables converting to real markdown grid
-syntax).
+syntax), and `png/jpg/webp→pdf` (same Pillow/`images` extra as the other image pairs — Pillow
+writes PDF natively, no mode-flattening needed for any source mode, confirmed directly against
+RGBA/L/P/CMYK/1-bit).
 
 ## Architecture
 
@@ -55,7 +57,12 @@ LibreOffice, chained), `pdf→docx` (`pdf2docx`), `pdf→txt` (PyMuPDF).
 `PptxToPdfConverter`/`PptToPdfConverter`, exist only to give the "tool not found" error message
 the right pair name), `pdf→md` (`pymupdf4llm`, optional `markdown` extra — a much heavier
 transitive install than Pillow, an ONNX layout model + onnxruntime + networkx, hence optional
-rather than joining `pdf2docx`/`pymupdf` as a hard dependency).
+rather than joining `pdf2docx`/`pymupdf` as a hard dependency), and `png/jpg/webp→pdf` (same
+`images` extra/`PillowConverter` as the other image pairs — `Image.save(format="PDF")` needs no
+new dependency or mode-flattening; the one real addition is honoring the source's embedded DPI
+metadata when present, falling back to a fixed 96 DPI otherwise, since Pillow's own PDF-writer
+default of 1px=1pt/72dpi would make a typical multi-thousand-pixel photo produce an absurdly
+oversized page).
 
 ## Explicitly deferred (not forgotten)
 
