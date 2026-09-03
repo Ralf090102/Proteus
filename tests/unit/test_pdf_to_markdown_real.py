@@ -66,3 +66,23 @@ def test_tool_checks_reports_resolved_path_when_pymupdf4llm_available():
     assert kind == "extra"
     assert status.available is True
     assert status.path is not None
+
+
+def test_convert_failure_surfaces_pymupdf_diagnostic_text(monkeypatch, tmp_path):
+    # Regression: pymupdf4llm's diagnostic banners (routed through
+    # pymupdf's own message sink, redirected to a throwaway buffer for
+    # the duration of the call) used to be discarded unconditionally —
+    # real debugging context (e.g. corrupt-xref recovery notices) that
+    # would otherwise vanish on a genuine failure. Must now be folded
+    # into the raised ConversionFailedError.
+    import pymupdf
+    import pymupdf4llm
+
+    def fake_to_markdown(path):
+        pymupdf.message("a diagnostic banner explaining the real problem")
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(pymupdf4llm, "to_markdown", fake_to_markdown)
+
+    with pytest.raises(ConversionFailedError, match="a diagnostic banner explaining"):
+        PdfToMarkdownConverter().convert(SAMPLE_PDF, tmp_path / "out.md", ConversionOptions())

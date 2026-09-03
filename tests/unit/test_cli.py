@@ -317,6 +317,29 @@ def test_install_deps_reports_distinct_hints_for_two_different_missing_extras(mo
     assert "uv tool install .[markdown]" in result.stdout
 
 
+def test_every_registered_extra_has_an_install_hint():
+    # Completeness guard: EXTRA_INSTALL_HINTS is hand-maintained in
+    # cli.py, entirely separate from where each converter's tool_checks()
+    # actually declares kind="extra" — nothing enforces the two stay in
+    # sync. Without this test, a future converter adding a new optional
+    # extra but forgetting the matching cli.py entry wouldn't fail loudly
+    # (unlike _collect_missing_tools()'s existing RuntimeError for an
+    # unrecognized *kind* value) — doctor()/install-deps would just
+    # silently ship "<no install hint registered>" to real users. kind is
+    # set unconditionally by tool_checks() regardless of whether the
+    # extra is actually installed in this environment, so this doesn't
+    # need Pillow/pymupdf4llm to be installed to run.
+    extra_bin_names = {
+        bin_name
+        for converter_class in cli_module.CONVERTER_REGISTRY.values()
+        for bin_name, _status, kind in converter_class().tool_checks()
+        if kind == "extra"
+    }
+    assert extra_bin_names, "expected at least one kind='extra' ToolCheck to exist"
+    missing_hints = extra_bin_names - cli_module.EXTRA_INSTALL_HINTS.keys()
+    assert not missing_hints, f"no EXTRA_INSTALL_HINTS entry for: {missing_hints}"
+
+
 def test_doctor_hints_at_install_deps_when_a_winget_installable_tool_is_missing(monkeypatch):
     from proteus.converters import libreoffice as libreoffice_module
     from proteus.core.dependencies import AvailabilityStatus

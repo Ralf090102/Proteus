@@ -87,18 +87,110 @@ class PyMuPdfTextExtractConverter(Converter):
     ) -> ConversionResult:
         """Extract text via PyMuPDF (imported as `pymupdf` — the `fitz`
         alias is deprecated as of the pinned version)."""
+        # Atomic-write pattern, matching PdfToMarkdownConverter/
+        # converters/image.py: writing straight to output_path (the
+        # previous behavior here) would destroy a pre-existing file on a
+        # mid-extraction failure — the same data-loss class fixed
+        # elsewhere this session, closed out here too rather than left
+        # inconsistent with every other converter that writes its own
+        # output file directly.
+        tmp_output = output_path.with_name(f".proteus-tmp-{uuid.uuid4().hex}{output_path.suffix}")
         try:
-            import pymupdf
+            try:
+                import pymupdf
 
-            with pymupdf.open(str(input_path)) as doc:
-                text = "\n".join(page.get_text() for page in doc)
-            output_path.write_text(text, encoding="utf-8")
-        except Exception as e:
-            raise ConversionFailedError(
-                f"PyMuPDF failed to extract text from {input_path}: {e}"
-            ) from e
+                with pymupdf.open(str(input_path)) as doc:
+                    text = "\n".join(page.get_text() for page in doc)
+                tmp_output.write_text(text, encoding="utf-8")
+            except Exception as e:
+                raise ConversionFailedError(
+                    f"PyMuPDF failed to extract text from {input_path}: {e}"
+                ) from e
+
+            ensure_output_created(tmp_output, "PyMuPDF")
+
+            try:
+                os.replace(tmp_output, output_path)
+            except OSError as e:
+                raise ConversionFailedError(
+                    f"PyMuPDF produced {tmp_output} but couldn't move it to "
+                    f"{output_path} (destination may be open elsewhere): {e}"
+                ) from e
+        except Exception:
+            tmp_output.unlink(missing_ok=True)
+            raise
 
         return ConversionResult(output_path=output_path)
+
+
+def _current_pymupdf_message_stream(pymupdf_module):
+    """The pymupdf module's current message-sink object, or None if its
+    private `_g_out_message` attribute isn't present.
+
+    pymupdf.set_messages() has no public getter — reading the current
+    sink (to restore it later) means touching this private attribute.
+    Isolated into its own function so the AttributeError-degrades-to-None
+    behavior is unit-testable against a fake object, without needing a
+    real pymupdf install misbehaving to exercise it.
+    """
+    try:
+        return pymupdf_module._g_out_message
+    except AttributeError:
+        return None
+
+
+def _run_pymupdf4llm_to_markdown(input_path: Path) -> str:
+    """Run pymupdf4llm.to_markdown(), with its diagnostic-banner sink
+    redirected away from wherever pymupdf's default points.
+
+    pymupdf4llm prints diagnostic banners ("Document parser messages",
+    OCR-engine notices) whenever layout/OCR processing has anything to
+    report — not just at import time, so PdfToMarkdownConverter's own
+    lazy-import doesn't cover it. It goes through pymupdf's own message
+    sink (pymupdf.message(), written directly to the stream
+    pymupdf.set_messages() points at — a plain
+    contextlib.redirect_stdout on Python's sys.stdout does NOT catch
+    this, confirmed empirically: pymupdf's sink is independent of
+    sys.stdout). Under proteus-gui.exe (the windowed context-menu entry
+    point, no console attached) letting this reach the real stream risks
+    a crash if pymupdf's default sink resolves to a None stdout;
+    redirect it to a throwaway buffer for the duration of this call and
+    restore the original sink afterward so other pymupdf usage in this
+    process (Pdf2DocxConverter, PyMuPdfTextExtractConverter) isn't
+    affected.
+
+    See _current_pymupdf_message_stream() for what happens if a future
+    pymupdf release removes the private attribute this needs to read the
+    current sink before overwriting it: degrade gracefully (skip the
+    redirect entirely, messages fall through to whatever pymupdf's own
+    default sink is) rather than leaving the sink stuck on a throwaway
+    buffer with no way back, or crashing every pdf->md conversion
+    outright.
+
+    On failure, whatever pymupdf reported to the redirected buffer right
+    before the exception (e.g. corrupt-xref recovery notices) is folded
+    into the raised ConversionFailedError instead of being silently
+    discarded — real debugging context that would otherwise vanish.
+    """
+    import pymupdf
+    import pymupdf4llm
+
+    original_message_stream = _current_pymupdf_message_stream(pymupdf)
+
+    message_buffer = io.StringIO()
+    if original_message_stream is not None:
+        pymupdf.set_messages(stream=message_buffer)
+    try:
+        return pymupdf4llm.to_markdown(str(input_path))
+    except Exception as e:
+        diagnostic_text = message_buffer.getvalue().strip()
+        suffix = f" (pymupdf reported: {diagnostic_text})" if diagnostic_text else ""
+        raise ConversionFailedError(
+            f"pymupdf4llm failed to convert {input_path}: {e}{suffix}"
+        ) from e
+    finally:
+        if original_message_stream is not None:
+            pymupdf.set_messages(stream=original_message_stream)
 
 
 class PdfToMarkdownConverter(Converter):
@@ -121,7 +213,14 @@ class PdfToMarkdownConverter(Converter):
     def is_available(self) -> bool:
         try:
             import pymupdf4llm  # noqa: F401
-        except ImportError:
+        except Exception:
+            # Broader than ImportError deliberately — see the matching
+            # comment on PillowConverter.is_available() in
+            # converters/image.py: a genuinely broken install (pymupdf4llm
+            # pulls in real transitive packages of its own — pymupdf-
+            # layout, onnxruntime, networkx — any of which could fail
+            # import with something other than ImportError) must not
+            # crash doctor()/list-formats() for every other pair too.
             return False
         return True
 
@@ -130,7 +229,7 @@ class PdfToMarkdownConverter(Converter):
             import pymupdf4llm
 
             status = AvailabilityStatus(True, Path(pymupdf4llm.__file__).parent, "package")
-        except ImportError:
+        except Exception:
             status = AvailabilityStatus(False, None, "not-found")
         return (ToolCheck(PYMUPDF4LLM_EXTRA_NAME, status, kind="extra"),)
 
@@ -138,8 +237,13 @@ class PdfToMarkdownConverter(Converter):
         self, input_path: Path, output_path: Path, options: ConversionOptions
     ) -> ConversionResult:
         try:
-            import pymupdf4llm
-        except ImportError as e:
+            import pymupdf4llm  # noqa: F401
+        except Exception as e:
+            # Broader than ImportError here too (see is_available()'s
+            # comment) — a broken, not just missing, install should still
+            # surface as a clean ConverterUnavailableError with the
+            # install hint, not a raw uncaught exception from deep
+            # inside pymupdf4llm's own transitive-dependency chain.
             raise ConverterUnavailableError(
                 f"pymupdf4llm is not installed. Install the optional markdown-conversion "
                 f"extra: {PYMUPDF4LLM_INSTALL_HINT}"
@@ -153,32 +257,10 @@ class PdfToMarkdownConverter(Converter):
         tmp_output = output_path.with_name(f".proteus-tmp-{uuid.uuid4().hex}{output_path.suffix}")
         try:
             try:
-                # pymupdf4llm prints diagnostic banners ("Document parser
-                # messages", OCR-engine notices) whenever layout/OCR
-                # processing has anything to report — not just at import
-                # time, so the lazy-import trick above doesn't cover it.
-                # It goes through pymupdf's own message sink
-                # (pymupdf.message(), written directly to the stream
-                # pymupdf.set_messages() points at — a plain
-                # contextlib.redirect_stdout on Python's sys.stdout does
-                # NOT catch this, confirmed empirically: pymupdf's sink is
-                # independent of sys.stdout). Under proteus-gui.exe (the
-                # windowed context-menu entry point, no console attached)
-                # letting this reach the real stream risks a crash if
-                # pymupdf's default sink resolves to a None stdout;
-                # redirect it to a throwaway buffer for the duration of
-                # this call and restore the original sink afterward so
-                # other pymupdf usage in this process (Pdf2DocxConverter,
-                # PyMuPdfTextExtractConverter) isn't affected.
-                import pymupdf
-
-                original_message_stream = pymupdf._g_out_message
-                pymupdf.set_messages(stream=io.StringIO())
-                try:
-                    md_text = pymupdf4llm.to_markdown(str(input_path))
-                finally:
-                    pymupdf.set_messages(stream=original_message_stream)
+                md_text = _run_pymupdf4llm_to_markdown(input_path)
                 tmp_output.write_text(md_text, encoding="utf-8")
+            except ConversionFailedError:
+                raise
             except Exception as e:
                 raise ConversionFailedError(
                     f"pymupdf4llm failed to convert {input_path}: {e}"

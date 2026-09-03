@@ -16,6 +16,7 @@ eagerly regardless of which pair is actually being run.
 
 from __future__ import annotations
 
+import math
 import os
 import uuid
 from pathlib import Path
@@ -51,6 +52,43 @@ DEFAULT_PDF_DPI = 96.0
 # and LAB are rejected too, not just the alpha/palette cases).
 _JPEG_SAFE_MODES = {"1", "L", "RGB", "RGBX", "CMYK", "YCbCr"}
 
+# Every Pillow image mode the PDF plugin can save directly (Pillow's own
+# PdfImagePlugin._save() mode dispatch, read directly from source) —
+# anything else must be flattened to RGB first or Image.save() raises
+# "cannot save mode X". Confirmed reachable from a real file: opening a
+# 16-bit-depth grayscale PNG gives mode "I;16", which isn't in this set —
+# that file converts fine to JPG/PNG/WEBP but previously failed outright
+# for PDF, an asymmetric capability gap this flattening closes.
+_PDF_SAFE_MODES = {"1", "L", "LA", "P", "RGB", "RGBA", "CMYK"}
+
+
+def _resolve_pdf_dpi(img) -> tuple[float, float]:
+    """The (x, y) DPI to write into a PDF target: the source's own
+    embedded DPI when present and sane, else DEFAULT_PDF_DPI for both
+    axes.
+
+    Two real-world degenerate cases confirmed directly, not just "dpi key
+    absent": (1) a 0 or negative value — reachable from real files (a PNG
+    pHYs chunk with px=0/py=0, or a JPEG EXIF XResolution of 0/1; Pillow
+    accepts both as valid `dpi` metadata) — reaching Pillow's PDF writer
+    as `resolution=0` raises ZeroDivisionError (`width * 72.0 /
+    x_resolution`), turning an otherwise-convertible file into a crash;
+    (2) anisotropic (non-square) DPI silently collapsed to one axis by
+    passing a single `resolution=` value instead of Pillow's two-axis
+    `dpi=(x, y)` kwarg — confirmed a real 300x600 DPI (1in x 2in) source
+    was distorted to a 1in x 1in page under `resolution=`, correct under
+    `dpi=`. Both are guarded against here.
+    """
+    source_dpi = img.info.get("dpi")
+    if not source_dpi:
+        return (DEFAULT_PDF_DPI, DEFAULT_PDF_DPI)
+    x_dpi, y_dpi = source_dpi[0], source_dpi[1]
+    if not (math.isfinite(x_dpi) and x_dpi > 0):
+        x_dpi = DEFAULT_PDF_DPI
+    if not (math.isfinite(y_dpi) and y_dpi > 0):
+        y_dpi = DEFAULT_PDF_DPI
+    return (x_dpi, y_dpi)
+
 
 class PillowConverter(Converter):
     """Generic Pillow-backed image converter. Subclasses just set
@@ -60,7 +98,15 @@ class PillowConverter(Converter):
     def is_available(self) -> bool:
         try:
             import PIL  # noqa: F401
-        except ImportError:
+        except Exception:
+            # Broader than ImportError deliberately: a genuinely broken
+            # install (e.g. a corrupted native extension) can fail import
+            # with something else entirely, and doctor()/list-formats()
+            # iterate every registered converter's is_available() in one
+            # pass — one broken optional install must not crash the
+            # command for every other pair too. Same "no stable typed-
+            # exception contract" reasoning already used for pdf2docx/
+            # PyMuPDF in converters/pdf_extract.py.
             return False
         return True
 
@@ -69,7 +115,7 @@ class PillowConverter(Converter):
             import PIL
 
             status = AvailabilityStatus(True, Path(PIL.__file__).parent, "package")
-        except ImportError:
+        except Exception:
             status = AvailabilityStatus(False, None, "not-found")
         return (ToolCheck(PILLOW_EXTRA_NAME, status, kind="extra"),)
 
@@ -78,7 +124,12 @@ class PillowConverter(Converter):
     ) -> ConversionResult:
         try:
             from PIL import Image
-        except ImportError as e:
+        except Exception as e:
+            # Broader than ImportError here too (see is_available()'s
+            # comment) — a broken, not just missing, install should still
+            # surface as a clean ConverterUnavailableError with the
+            # install hint, not a raw uncaught exception from deep
+            # inside a native-extension import failure.
             raise ConverterUnavailableError(
                 f"Pillow is not installed. Install the optional image-conversion "
                 f"extra: {PILLOW_INSTALL_HINT}"
@@ -103,18 +154,32 @@ class PillowConverter(Converter):
                 target_format = _PILLOW_FORMAT[self.to_ext]
                 save_kwargs: dict[str, object] = {}
                 with Image.open(input_path) as img:
+                    if target_format == "PDF":
+                        # Computed before any mode reassignment below —
+                        # img.convert()'s effect on .info["dpi"] isn't
+                        # something to depend on, so resolve DPI from the
+                        # original decoded image. (WebP sources never
+                        # carry dpi metadata regardless — Pillow's own
+                        # WebP reader doesn't populate it even when the
+                        # file has EXIF resolution tags, confirmed
+                        # directly — so WebpToPdfConverter always lands on
+                        # the DEFAULT_PDF_DPI fallback; not a bug here,
+                        # just an inherent Pillow reader limitation.)
+                        save_kwargs["dpi"] = _resolve_pdf_dpi(img)
+                        if img.mode not in _PDF_SAFE_MODES:
+                            img = img.convert("RGB")
                     if target_format == "JPEG" and img.mode not in _JPEG_SAFE_MODES:
                         img = img.convert("RGB")
-                    if target_format == "PDF":
-                        # Honor the source's own embedded DPI when present
-                        # (common for real scanner output — the page then
-                        # matches the image's intended physical size);
-                        # otherwise fall back to DEFAULT_PDF_DPI rather
-                        # than Pillow's implicit 72dpi. No mode-flattening
-                        # needed here — confirmed directly against RGBA,
-                        # L, P, CMYK, and 1-bit sources, unlike JPEG above.
-                        source_dpi = img.info.get("dpi")
-                        save_kwargs["resolution"] = source_dpi[0] if source_dpi else DEFAULT_PDF_DPI
+                    # A multi-frame source (e.g. animated WebP) only ever
+                    # contributes its first frame — Image.open() decodes
+                    # frame 0 by default and this never passes
+                    # save_all=True, so img.save() here only ever writes
+                    # a single-page PDF/single-frame JPEG/PNG regardless
+                    # of how many frames the source has. Deliberate for a
+                    # 1-to-1 "convert this picture" tool, not a batch/
+                    # animation converter — confirmed directly (a 3-frame
+                    # animated WebP produces a 1-page PDF matching only
+                    # the first frame, no error).
                     img.save(tmp_output, format=target_format, **save_kwargs)
             except Exception as e:
                 raise ConversionFailedError(f"Pillow failed to convert {input_path}: {e}") from e

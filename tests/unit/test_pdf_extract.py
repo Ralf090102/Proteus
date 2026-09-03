@@ -63,6 +63,26 @@ def test_pymupdf_raises_conversion_failed_for_invalid_pdf(tmp_path):
         PyMuPdfTextExtractConverter().convert(bad_pdf, tmp_path / "out.txt", ConversionOptions())
 
 
+def test_pymupdf_convert_does_not_destroy_pre_existing_output_on_failure(tmp_path):
+    # Regression: this converter used to write straight to output_path
+    # (output_path.write_text(...)), which would destroy a pre-existing
+    # file on a mid-extraction failure — the same data-loss class fixed
+    # elsewhere (converters/pandoc.py, converters/image.py,
+    # PdfToMarkdownConverter). Now uses the same atomic temp-file +
+    # os.replace() pattern.
+    bad_pdf = tmp_path / "not-a-real.pdf"
+    bad_pdf.write_bytes(b"this is not a PDF")
+
+    output_path = tmp_path / "out.txt"
+    output_path.write_text("important pre-existing content")
+
+    with pytest.raises(ConversionFailedError):
+        PyMuPdfTextExtractConverter().convert(bad_pdf, output_path, ConversionOptions())
+
+    assert output_path.read_text() == "important pre-existing content"
+    assert list(tmp_path.glob(".proteus-tmp-*")) == []
+
+
 def test_pdf2docx_import_failure_surfaces_as_conversion_failed(monkeypatch, tmp_path):
     # Regression: the lazy `from pdf2docx import Converter` sat outside
     # convert()'s try/except — a broken/partial pdf2docx install would
