@@ -1,11 +1,14 @@
-"""Tests for find_tool()'s env/which/known-location/not-found precedence."""
+"""Tests for find_tool()'s env/which/known-location/not-found precedence,
+and resolve_proteus_gui_exe_path()'s wrapping of it."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from proteus.core import dependencies as dependencies_module
-from proteus.core.dependencies import find_tool
+from proteus.core.dependencies import AvailabilityStatus, find_tool, resolve_proteus_gui_exe_path
 
 
 def test_env_override_wins_when_it_points_at_a_real_file(monkeypatch, tmp_path):
@@ -65,3 +68,25 @@ def test_not_found_when_no_source_has_it(monkeypatch):
     assert status.available is False
     assert status.path is None
     assert status.source == "not-found"
+
+
+def test_resolve_proteus_gui_exe_path_returns_resolved_path_when_found(monkeypatch, tmp_path):
+    exe_path = tmp_path / "proteus-gui.exe"
+    exe_path.write_text("placeholder")
+    monkeypatch.setattr(
+        dependencies_module,
+        "find_tool",
+        lambda *a, **k: AvailabilityStatus(True, exe_path, "path"),
+    )
+
+    assert resolve_proteus_gui_exe_path() == exe_path.resolve()
+
+
+def test_resolve_proteus_gui_exe_path_raises_when_not_found(monkeypatch):
+    monkeypatch.setattr(
+        dependencies_module,
+        "find_tool",
+        lambda *a, **k: AvailabilityStatus(False, None, "not-found"),
+    )
+    with pytest.raises(RuntimeError, match="uv tool install"):
+        resolve_proteus_gui_exe_path()

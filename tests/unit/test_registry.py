@@ -21,6 +21,14 @@ from proteus.converters.libreoffice import (
     PptToPdfConverter,
     PptxToPdfConverter,
 )
+from proteus.converters.merge import (
+    JpgImagesToPdfMerger,
+    MarkdownMerger,
+    PdfMerger,
+    PngImagesToPdfMerger,
+    TextMerger,
+    WebpImagesToPdfMerger,
+)
 from proteus.converters.pandoc import DocxToMarkdownConverter, MarkdownToDocxConverter
 from proteus.converters.pdf_extract import (
     Pdf2DocxConverter,
@@ -28,7 +36,12 @@ from proteus.converters.pdf_extract import (
     PyMuPdfTextExtractConverter,
 )
 from proteus.core.errors import UnknownConversionError
-from proteus.core.registry import CONVERTER_REGISTRY, get_converter
+from proteus.core.registry import (
+    CONVERTER_REGISTRY,
+    MERGE_REGISTRY,
+    get_converter,
+    get_merger,
+)
 
 
 def test_docx_to_pdf_registered_to_libreoffice_converter():
@@ -135,6 +148,68 @@ def test_get_converter_against_real_registry_constructs_libreoffice_converter():
 def test_get_converter_against_real_registry_unknown_pair_raises():
     with pytest.raises(UnknownConversionError):
         get_converter("txt", "pdf")
+
+
+def test_pdf_registered_to_pdf_merger():
+    assert MERGE_REGISTRY["pdf"] is PdfMerger
+
+
+def test_md_registered_to_markdown_merger():
+    assert MERGE_REGISTRY["md"] is MarkdownMerger
+
+
+def test_txt_registered_to_text_merger():
+    assert MERGE_REGISTRY["txt"] is TextMerger
+
+
+def test_png_registered_to_png_images_to_pdf_merger():
+    assert MERGE_REGISTRY["png"] is PngImagesToPdfMerger
+
+
+def test_jpg_registered_to_jpg_images_to_pdf_merger():
+    assert MERGE_REGISTRY["jpg"] is JpgImagesToPdfMerger
+
+
+def test_webp_registered_to_webp_images_to_pdf_merger():
+    assert MERGE_REGISTRY["webp"] is WebpImagesToPdfMerger
+
+
+def test_get_merger_known_extension_constructs_instance():
+    registry = {"dummy": PdfMerger}
+    merger = get_merger("dummy", registry=registry)
+    assert isinstance(merger, PdfMerger)
+
+
+def test_get_merger_unknown_extension_raises_with_attempted_and_known_extensions_listed():
+    registry = {"pdf": PdfMerger, "md": MarkdownMerger}
+    with pytest.raises(UnknownConversionError) as exc_info:
+        get_merger("docx", registry=registry)
+    message = str(exc_info.value)
+    assert "docx" in message
+    assert "pdf" in message
+    assert "md" in message
+
+
+def test_get_merger_empty_registry_raises_with_none_registered_message():
+    with pytest.raises(UnknownConversionError) as exc_info:
+        get_merger("pdf", registry={})
+    assert "none registered yet" in str(exc_info.value)
+
+
+def test_get_merger_against_real_registry_constructs_pdf_merger():
+    merger = get_merger("pdf")
+    assert isinstance(merger, PdfMerger)
+
+
+def test_get_merger_against_real_registry_unknown_extension_raises():
+    with pytest.raises(UnknownConversionError):
+        get_merger("docx")
+
+
+def test_get_merger_normalizes_casing():
+    registry = {"pdf": PdfMerger}
+    merger = get_merger("PDF", registry=registry)
+    assert isinstance(merger, PdfMerger)
 
 
 def test_get_converter_normalizes_casing(fake_converter):

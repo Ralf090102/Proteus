@@ -766,3 +766,270 @@ def test_main_reraises_unexpected_error_when_not_from_context_menu(monkeypatch):
 
     with pytest.raises(ValueError, match="boom"):
         cli_module.main()
+
+
+# --- merge (hidden, Send-To-only command) ---
+
+
+class _FakeMerger:
+    """Records the input_paths it was called with and writes a trivial
+    output file — enough to exercise cli.py's merge() wiring without a
+    real Merger backend."""
+
+    to_ext = "pdf"
+
+    def __init__(self):
+        self.calls: list[list[Path]] = []
+
+    def merge(self, input_paths, output_path):
+        from proteus.core.converter import ConversionResult
+
+        self.calls.append(list(input_paths))
+        output_path.write_bytes(b"merged")
+        return ConversionResult(output_path=output_path)
+
+
+def test_merge_too_few_files_exits_nonzero(tmp_path):
+    only_file = tmp_path / "a.pdf"
+    only_file.write_text("placeholder")
+
+    result = runner.invoke(app, ["merge", str(only_file)])
+
+    assert result.exit_code == 1
+    assert "at least 2" in result.output
+
+
+def test_merge_mismatched_extensions_exits_nonzero_and_names_both(tmp_path):
+    pdf_file = tmp_path / "a.pdf"
+    pdf_file.write_text("placeholder")
+    md_file = tmp_path / "b.md"
+    md_file.write_text("placeholder")
+
+    result = runner.invoke(app, ["merge", str(pdf_file), str(md_file)])
+
+    assert result.exit_code == 1
+    assert "md" in result.output
+    assert "pdf" in result.output
+
+
+def test_merge_unregistered_extension_exits_nonzero(tmp_path):
+    a = tmp_path / "a.docx"
+    a.write_text("placeholder")
+    b = tmp_path / "b.docx"
+    b.write_text("placeholder")
+
+    result = runner.invoke(app, ["merge", str(a), str(b)])
+
+    assert result.exit_code == 1
+    assert "docx" in result.output
+
+
+def test_merge_success_writes_merged_output_named_by_to_ext(monkeypatch, tmp_path):
+    fake_merger = _FakeMerger()
+    monkeypatch.setattr(cli_module, "get_merger", lambda ext: fake_merger)
+
+    a = tmp_path / "a.pdf"
+    a.write_text("placeholder")
+    b = tmp_path / "b.pdf"
+    b.write_text("placeholder")
+
+    result = runner.invoke(app, ["merge", str(a), str(b)])
+
+    assert result.exit_code == 0
+    output_path = tmp_path / "merged.pdf"
+    assert output_path.exists()
+    # rich can line-wrap a long path under CliRunner's narrow default
+    # width — collapse newlines before checking, same as the doctor tests.
+    assert str(output_path) in result.output.replace("\n", "")
+
+
+def test_merge_sorts_files_alphabetically_before_calling_merger(monkeypatch, tmp_path):
+    # Regression: Send To's raw argument order is not alphabetical
+    # (confirmed during v3's design spike) — merge() must sort itself
+    # rather than trust whatever order it received.
+    fake_merger = _FakeMerger()
+    monkeypatch.setattr(cli_module, "get_merger", lambda ext: fake_merger)
+
+    c = tmp_path / "c.pdf"
+    c.write_text("placeholder")
+    a = tmp_path / "a.pdf"
+    a.write_text("placeholder")
+    b = tmp_path / "b.pdf"
+    b.write_text("placeholder")
+
+    result = runner.invoke(app, ["merge", str(c), str(a), str(b)])
+
+    assert result.exit_code == 0
+    assert [p.name for p in fake_merger.calls[0]] == ["a.pdf", "b.pdf", "c.pdf"]
+
+
+def test_merge_auto_names_output_avoiding_collision(monkeypatch, tmp_path):
+    fake_merger = _FakeMerger()
+    monkeypatch.setattr(cli_module, "get_merger", lambda ext: fake_merger)
+    (tmp_path / "merged.pdf").write_text("already exists")
+
+    a = tmp_path / "a.pdf"
+    a.write_text("placeholder")
+    b = tmp_path / "b.pdf"
+    b.write_text("placeholder")
+
+    result = runner.invoke(app, ["merge", str(a), str(b)])
+
+    assert result.exit_code == 0
+    assert (tmp_path / "merged (1).pdf").exists()
+    assert (tmp_path / "merged.pdf").read_text() == "already exists"  # untouched
+
+
+def test_merge_replace_source_deletes_originals_on_success(monkeypatch, tmp_path):
+    fake_merger = _FakeMerger()
+    monkeypatch.setattr(cli_module, "get_merger", lambda ext: fake_merger)
+
+    a = tmp_path / "a.pdf"
+    a.write_text("placeholder")
+    b = tmp_path / "b.pdf"
+    b.write_text("placeholder")
+
+    result = runner.invoke(app, ["merge", str(a), str(b), "--replace-source"])
+
+    assert result.exit_code == 0
+    assert not a.exists()
+    assert not b.exists()
+
+
+def test_merge_replace_source_not_applied_when_merge_fails(monkeypatch, tmp_path):
+    def raise_conversion_failed(*args, **kwargs):
+        raise ConversionFailedError("boom")
+
+    monkeypatch.setattr(cli_module, "get_merger", raise_conversion_failed)
+
+    a = tmp_path / "a.pdf"
+    a.write_text("placeholder")
+    b = tmp_path / "b.pdf"
+    b.write_text("placeholder")
+
+    result = runner.invoke(app, ["merge", str(a), str(b), "--replace-source"])
+
+    assert result.exit_code == 1
+    assert a.exists()
+    assert b.exists()
+
+
+def test_merge_replace_source_delete_failure_warns_but_does_not_fail_command(
+    monkeypatch, tmp_path
+):
+    fake_merger = _FakeMerger()
+    monkeypatch.setattr(cli_module, "get_merger", lambda ext: fake_merger)
+    monkeypatch.setattr(
+        cli_module.Path, "unlink", lambda self: (_ for _ in ()).throw(OSError("in use"))
+    )
+
+    a = tmp_path / "a.pdf"
+    a.write_text("placeholder")
+    b = tmp_path / "b.pdf"
+    b.write_text("placeholder")
+
+    result = runner.invoke(app, ["merge", str(a), str(b), "--replace-source"])
+
+    assert result.exit_code == 0
+    assert "Warning" in result.output
+    assert "in use" in result.output
+
+
+def test_merge_from_context_menu_success_is_fully_silent(monkeypatch, tmp_path):
+    fake_merger = _FakeMerger()
+    monkeypatch.setattr(cli_module, "get_merger", lambda ext: fake_merger)
+
+    a = tmp_path / "a.pdf"
+    a.write_text("placeholder")
+    b = tmp_path / "b.pdf"
+    b.write_text("placeholder")
+
+    result = runner.invoke(app, ["merge", str(a), str(b), "--from-context-menu"])
+
+    assert result.exit_code == 0
+    assert result.output == ""
+    assert (tmp_path / "merged.pdf").exists()
+
+
+def test_merge_from_context_menu_failure_shows_message_box_not_console(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        cli_module.ctypes.windll.user32,
+        "MessageBoxW",
+        lambda *args: calls.append(args),
+    )
+
+    def raise_conversion_failed(*args, **kwargs):
+        raise ConversionFailedError("boom")
+
+    monkeypatch.setattr(cli_module, "get_merger", raise_conversion_failed)
+
+    a = tmp_path / "a.pdf"
+    a.write_text("placeholder")
+    b = tmp_path / "b.pdf"
+    b.write_text("placeholder")
+
+    result = runner.invoke(app, ["merge", str(a), str(b), "--from-context-menu"])
+
+    assert result.exit_code == 1
+    assert result.output == ""
+    assert len(calls) == 1
+    assert "boom" in calls[0][1]
+
+
+# --- install-sendto / uninstall-sendto ---
+
+
+def test_install_sendto_reports_installed_labels(monkeypatch):
+    monkeypatch.setattr(cli_module.sendto, "install", lambda: ["Merge PDF", "Merge Markdown"])
+    result = runner.invoke(app, ["install-sendto"])
+    assert result.exit_code == 0
+    assert "Merge PDF" in result.stdout
+    assert "Merge Markdown" in result.stdout
+
+
+def test_install_sendto_reports_missing_proteus_gui_cleanly(monkeypatch):
+    def raise_runtime_error():
+        raise RuntimeError("proteus-gui isn't on PATH. Run `uv tool install .` first.")
+
+    monkeypatch.setattr(cli_module.sendto, "install", raise_runtime_error)
+    result = runner.invoke(app, ["install-sendto"])
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "uv tool install" in result.output
+
+
+def test_install_sendto_reports_os_error_cleanly(monkeypatch):
+    def raise_os_error():
+        raise OSError("Access is denied")
+
+    monkeypatch.setattr(cli_module.sendto, "install", raise_os_error)
+    result = runner.invoke(app, ["install-sendto"])
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Access is denied" in result.output
+
+
+def test_uninstall_sendto_reports_removed_labels(monkeypatch):
+    monkeypatch.setattr(cli_module.sendto, "uninstall", lambda: ["Merge PDF"])
+    result = runner.invoke(app, ["uninstall-sendto"])
+    assert result.exit_code == 0
+    assert "Merge PDF" in result.stdout
+
+
+def test_uninstall_sendto_reports_nothing_installed(monkeypatch):
+    monkeypatch.setattr(cli_module.sendto, "uninstall", lambda: [])
+    result = runner.invoke(app, ["uninstall-sendto"])
+    assert result.exit_code == 0
+    assert "No proteus Send To shortcuts" in result.stdout
+
+
+def test_uninstall_sendto_reports_os_error_cleanly(monkeypatch):
+    def raise_os_error():
+        raise OSError("Access is denied")
+
+    monkeypatch.setattr(cli_module.sendto, "uninstall", raise_os_error)
+    result = runner.invoke(app, ["uninstall-sendto"])
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Access is denied" in result.output

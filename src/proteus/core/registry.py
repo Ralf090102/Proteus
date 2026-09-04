@@ -32,6 +32,14 @@ from proteus.converters.libreoffice import (
     PptToPdfConverter,
     PptxToPdfConverter,
 )
+from proteus.converters.merge import (
+    JpgImagesToPdfMerger,
+    MarkdownMerger,
+    PdfMerger,
+    PngImagesToPdfMerger,
+    TextMerger,
+    WebpImagesToPdfMerger,
+)
 from proteus.converters.pandoc import DocxToMarkdownConverter, MarkdownToDocxConverter
 from proteus.converters.pdf_extract import (
     Pdf2DocxConverter,
@@ -40,6 +48,7 @@ from proteus.converters.pdf_extract import (
 )
 from proteus.core.converter import Converter
 from proteus.core.errors import UnknownConversionError
+from proteus.core.merger import Merger
 
 CONVERTER_REGISTRY: dict[tuple[str, str], type[Converter]] = {
     ("docx", "pdf"): LibreOfficeConverter,
@@ -92,3 +101,43 @@ def get_converter(
             f"No converter registered for {from_ext!r} -> {to_ext!r}. Known pairs: {known}"
         ) from None
     return converter_class()
+
+
+# extension -> Merger lookup for v3's "combine 2+ same-type files into one"
+# feature (windows/sendto.py + cli.py's hidden `merge` command) — parallel
+# to CONVERTER_REGISTRY above, but keyed by one shared extension instead of
+# a (from_ext, to_ext) pair, since a merge's output format is implicit
+# (Merger.to_ext) rather than something the caller chooses. No ambiguity
+# results from this: png/jpg/webp all map to their own thin
+# ImagesToPdfMerger subclass (see converters/merge.py) purely so error
+# messages name the right extension, not because the merge behavior
+# differs.
+MERGE_REGISTRY: dict[str, type[Merger]] = {
+    "pdf": PdfMerger,
+    "md": MarkdownMerger,
+    "txt": TextMerger,
+    "png": PngImagesToPdfMerger,
+    "jpg": JpgImagesToPdfMerger,
+    "webp": WebpImagesToPdfMerger,
+}
+
+
+def get_merger(
+    ext: str,
+    registry: Mapping[str, type[Merger]] = MERGE_REGISTRY,
+) -> Merger:
+    """Look up ext and construct its Merger.
+
+    Raises UnknownConversionError, listing every known merge extension, if
+    ext isn't registered — same self-correcting-error-message contract as
+    get_converter() above.
+    """
+    ext = ext.lower()
+    try:
+        merger_class = registry[ext]
+    except KeyError:
+        known = ", ".join(sorted(registry.keys())) or "(none registered yet)"
+        raise UnknownConversionError(
+            f"No merger registered for {ext!r}. Known merge extensions: {known}"
+        ) from None
+    return merger_class()

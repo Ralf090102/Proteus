@@ -17,6 +17,13 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+# Windowed-subsystem twin of the regular `proteus` console CLI (see
+# [project.gui-scripts] in pyproject.toml) — every context-menu verb and
+# Send To shortcut's Command points here instead of `proteus` itself, so a
+# right-click/Send-To-launched conversion doesn't flash a console window.
+PROTEUS_GUI_BIN = "proteus-gui"
+PROTEUS_GUI_ENV_VAR = "PROTEUS_GUI_EXE_PATH"
+
 
 @dataclass(frozen=True)
 class AvailabilityStatus:
@@ -80,3 +87,25 @@ def find_tool(bin_name: str, *, env_var: str | None = None) -> AvailabilityStatu
             return AvailabilityStatus(True, candidate, "known-location")
 
     return AvailabilityStatus(False, None, "not-found")
+
+
+def resolve_proteus_gui_exe_path() -> Path:
+    """Resolve the installed `proteus-gui` exe's own absolute path — the
+    windowed twin of the regular `proteus` console CLI that every
+    context-menu verb (windows/context_menu.py) and Send To shortcut
+    (windows/sendto.py) actually invokes.
+
+    Both callers launch this with no working directory or project-venv
+    context of their own, so this needs a stable, global path — exactly
+    what `uv tool install .` provides. Goes through find_tool() (env
+    override -> PATH -> known `uv tool install` location) rather than a
+    bare shutil.which(), for the same PATH-unreliability reason
+    LibreOffice/Pandoc do.
+    """
+    status = find_tool(PROTEUS_GUI_BIN, env_var=PROTEUS_GUI_ENV_VAR)
+    if not status.available:
+        raise RuntimeError(
+            "proteus-gui isn't on PATH. Run `uv tool install .` first so the shortcut "
+            "has a stable exe path to point at."
+        )
+    return status.path.resolve()

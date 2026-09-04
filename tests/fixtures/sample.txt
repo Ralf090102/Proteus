@@ -1,0 +1,1 @@
+First sample text fixture, used for merge tests alongside sample2.txt.

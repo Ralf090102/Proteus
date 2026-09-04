@@ -28,7 +28,7 @@ from __future__ import annotations
 import winreg
 from pathlib import Path
 
-from proteus.core.dependencies import find_tool
+from proteus.core.dependencies import resolve_proteus_gui_exe_path
 from proteus.core.registry import CONVERTER_REGISTRY
 
 MENU_KEY_NAME = "proteus_menu"
@@ -36,11 +36,6 @@ MENU_DISPLAY_NAME = "Proteus"
 VERB_PREFIX = "proteus_convert_to_"
 REPLACE_SUFFIX = "_replace"
 CLASSES_ROOT = winreg.HKEY_CURRENT_USER
-# Windowed-subsystem twin of the regular `proteus` console CLI (see
-# [project.gui-scripts] in pyproject.toml) — every verb's Command points
-# here instead, so a right-click conversion doesn't flash a console window.
-PROTEUS_GUI_BIN = "proteus-gui"
-PROTEUS_GUI_ENV_VAR = "PROTEUS_GUI_EXE_PATH"
 
 
 def _verb_name(to_ext: str, *, replace_source: bool = False) -> str:
@@ -60,27 +55,6 @@ def _pairs_by_from_ext() -> dict[str, list[str]]:
     return grouped
 
 
-def _proteus_gui_exe_path() -> Path:
-    """Resolve the installed `proteus-gui` exe's own absolute path — the
-    windowed twin of the regular `proteus` console CLI that every verb's
-    Command actually invokes.
-
-    Explorer launches the registered command with no working directory
-    or project-venv context of its own, so this needs a stable, global
-    path — exactly what `uv tool install .` provides. Goes through
-    find_tool() (env override -> PATH -> known `uv tool install` location)
-    rather than a bare shutil.which(), for the same PATH-unreliability
-    reason LibreOffice/Pandoc do.
-    """
-    status = find_tool(PROTEUS_GUI_BIN, env_var=PROTEUS_GUI_ENV_VAR)
-    if not status.available:
-        raise RuntimeError(
-            "proteus-gui isn't on PATH. Run `uv tool install .` first so the context "
-            "menu has a stable exe path to point at."
-        )
-    return status.path.resolve()
-
-
 def install() -> list[str]:
     """Install one "Proteus" cascading submenu per source extension, with
     two items inside it per registered conversion pair for that extension
@@ -89,7 +63,7 @@ def install() -> list[str]:
 
     Returns the "from -> to" pairs installed (replace variants marked).
     """
-    exe_path = _proteus_gui_exe_path()
+    exe_path = resolve_proteus_gui_exe_path()
     pairs_by_ext = _pairs_by_from_ext()
 
     installed = []

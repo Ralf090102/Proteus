@@ -28,8 +28,8 @@ from proteus.converters.pdf_extract import PYMUPDF4LLM_EXTRA_NAME, PYMUPDF4LLM_I
 from proteus.core.converter import ConversionOptions, ToolCheck
 from proteus.core.dependencies import INSTALL_LINKS, WINGET_PACKAGE_IDS
 from proteus.core.errors import ProteusError
-from proteus.core.registry import CONVERTER_REGISTRY, get_converter
-from proteus.windows import context_menu
+from proteus.core.registry import CONVERTER_REGISTRY, get_converter, get_merger
+from proteus.windows import context_menu, sendto
 
 app = typer.Typer(
     name="proteus",
@@ -120,6 +120,95 @@ def convert(
 
     if not from_context_menu:
         console.print(f"[bold green]Converted[/bold green] -> {escape(str(result.output_path))}")
+
+
+@app.command(hidden=True)
+def merge(
+    files: list[Path] = typer.Argument(
+        ..., exists=True, dir_okay=False, help="Files to merge (2 or more, same type)."
+    ),
+    replace_source: bool = typer.Option(
+        False,
+        "--replace-source",
+        help="Delete the original files after a successful merge.",
+    ),
+    from_context_menu: bool = typer.Option(
+        False,
+        "--from-context-menu",
+        hidden=True,
+        help="Internal: invoked via a Send To shortcut (no console attached).",
+    ),
+) -> None:
+    """Merge 2+ same-type FILES into one.
+
+    Hidden and internal — not meant to be typed directly. Reachable only
+    via the Send To shortcuts windows/sendto.py installs, which is the
+    only mechanism that can deliver a whole multi-file selection to one
+    command invocation (see windows/sendto.py's module docstring)."""
+    if len(files) < 2:
+        _report_error("Select at least 2 files to merge.", from_context_menu)
+        raise typer.Exit(1)
+
+    extensions = {f.suffix.lstrip(".").lower() for f in files}
+    if len(extensions) > 1:
+        _report_error(
+            f"All selected files must be the same type (got: {', '.join(sorted(extensions))}).",
+            from_context_menu,
+        )
+        raise typer.Exit(1)
+
+    try:
+        merger = get_merger(extensions.pop())
+    except ProteusError as e:
+        _report_error(str(e), from_context_menu)
+        raise typer.Exit(1) from None
+
+    # Order: alphabetical by filename, decided here rather than trusted
+    # from Explorer — confirmed during v3's design spike that Send To's
+    # raw argument order is not alphabetical (selection/OS order instead).
+    sorted_files = sorted(files, key=lambda f: f.name)
+    output_path = _auto_merge_output_path(sorted_files[0].parent, merger.to_ext)
+
+    try:
+        result = merger.merge(sorted_files, output_path)
+    except ProteusError as e:
+        _report_error(str(e), from_context_menu)
+        raise typer.Exit(1) from None
+
+    if replace_source:
+        delete_failures = []
+        for f in sorted_files:
+            try:
+                f.unlink()
+            except OSError as e:
+                delete_failures.append(f"{f.name}: {e}")
+        if delete_failures:
+            # Same non-fatal-warning treatment as convert()'s
+            # --replace-source path — the merge itself already succeeded.
+            _report_warning(
+                "Merged, but couldn't delete some original files: "
+                + "; ".join(delete_failures),
+                from_context_menu,
+            )
+
+    if not from_context_menu:
+        console.print(f"[bold green]Merged[/bold green] -> {escape(str(result.output_path))}")
+
+
+def _auto_merge_output_path(directory: Path, ext: str) -> Path:
+    """merge has no CLI-equivalent naming convention to fall back on (it's
+    only ever reachable via Send To, with no output-path flag at all) —
+    the name has to be fully automatic. "merged.{ext}", collision-avoided
+    with a "(1)", "(2)", ... suffix rather than overwriting."""
+    candidate = directory / f"merged.{ext}"
+    if not candidate.exists():
+        return candidate
+    n = 1
+    while True:
+        candidate = directory / f"merged ({n}).{ext}"
+        if not candidate.exists():
+            return candidate
+        n += 1
 
 
 def _report_error(message: str, from_context_menu: bool) -> None:
@@ -406,6 +495,41 @@ def uninstall_context_menu() -> None:
     console.print(f"[bold green]Removed[/bold green] {len(removed)} context-menu verb(s):")
     for pair in removed:
         console.print(f"  {pair}")
+
+
+@app.command(name="install-sendto")
+def install_sendto() -> None:
+    """Register a Send To shortcut for each merge target (pdf/md/txt
+    merge, images -> pdf), plus a "(Replace Originals)" variant per
+    target — 8 shortcuts, in Explorer's Send To menu (no admin rights
+    needed)."""
+    try:
+        installed = sendto.install()
+    except (RuntimeError, OSError) as e:
+        _report_error(str(e), from_context_menu=False)
+        raise typer.Exit(1) from None
+
+    console.print(f"[bold green]Installed[/bold green] {len(installed)} Send To shortcut(s):")
+    for label in installed:
+        console.print(f"  {label}")
+
+
+@app.command(name="uninstall-sendto")
+def uninstall_sendto() -> None:
+    """Remove every proteus-installed Send To shortcut."""
+    try:
+        removed = sendto.uninstall()
+    except OSError as e:
+        _report_error(str(e), from_context_menu=False)
+        raise typer.Exit(1) from None
+
+    if not removed:
+        console.print("[yellow]No proteus Send To shortcuts were installed.[/yellow]")
+        return
+
+    console.print(f"[bold green]Removed[/bold green] {len(removed)} Send To shortcut(s):")
+    for label in removed:
+        console.print(f"  {label}")
 
 
 def main() -> None:

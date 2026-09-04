@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import pytest
 
-from proteus.core.dependencies import AvailabilityStatus
 from proteus.core.registry import CONVERTER_REGISTRY
 from proteus.windows import context_menu as context_menu_module
 
@@ -94,27 +93,19 @@ def fake_winreg(monkeypatch):
 
 @pytest.fixture
 def fake_proteus_exe(monkeypatch, tmp_path):
-    # Every installed verb's Command resolves through _proteus_gui_exe_path()
-    # only (see context_menu.install()) — find_tool() is mocked wholesale
-    # here since it's the only exe path context_menu.py resolves at all.
+    # Every installed verb's Command resolves through the shared
+    # resolve_proteus_gui_exe_path() (core/dependencies.py) — mocked
+    # wholesale here since it's the only exe path context_menu.py
+    # resolves at all. See test_dependencies.py for that function's own
+    # found/not-found tests.
     exe_path = tmp_path / "proteus-gui.exe"
     exe_path.write_text("placeholder")
     monkeypatch.setattr(
         context_menu_module,
-        "find_tool",
-        lambda *a, **k: AvailabilityStatus(True, exe_path, "path"),
+        "resolve_proteus_gui_exe_path",
+        lambda: exe_path,
     )
     return exe_path
-
-
-def test_proteus_gui_exe_path_raises_when_not_found(monkeypatch):
-    monkeypatch.setattr(
-        context_menu_module,
-        "find_tool",
-        lambda *a, **k: AvailabilityStatus(False, None, "not-found"),
-    )
-    with pytest.raises(RuntimeError, match="uv tool install"):
-        context_menu_module._proteus_gui_exe_path()
 
 
 def test_install_creates_a_parent_menu_key_per_source_extension(fake_winreg, fake_proteus_exe):
