@@ -10,9 +10,10 @@ from proteus.core.converter import (
     ConversionOptions,
     ConversionResult,
     Converter,
+    atomic_write,
     ensure_output_created,
 )
-from proteus.core.errors import ConversionFailedError
+from proteus.core.errors import ConversionFailedError, ConverterUnavailableError
 
 
 class DummyConverter(Converter):
@@ -71,3 +72,81 @@ def test_ensure_output_created_passes_for_non_empty_file(tmp_path):
     real_file.write_bytes(b"%PDF-fake")
 
     ensure_output_created(real_file, "SomeBackend")  # must not raise
+
+
+# --- atomic_write() ---
+#
+# Direct tests for the shared write-to-temp/verify/replace-in mechanics
+# every Converter/Merger that writes its own output file now routes
+# through (converters/image.py, pdf_extract.py, pandoc.py, merge.py) —
+# each of those keeps its own "doesn't destroy pre-existing output"
+# regression test too (pinning that it's actually wired to atomic_write,
+# not just that the mechanism works), so these test the mechanism itself
+# in isolation rather than duplicating that per-converter coverage.
+
+
+def test_atomic_write_writes_via_write_fn_and_returns_conversion_result(tmp_path):
+    output_path = tmp_path / "out.txt"
+
+    def write(tmp_output: Path) -> None:
+        tmp_output.write_text("hello")
+
+    result = atomic_write(output_path, "SomeBackend", write)
+
+    assert result == ConversionResult(output_path=output_path)
+    assert output_path.read_text() == "hello"
+    assert list(tmp_path.glob(".proteus-tmp-*")) == []
+
+
+def test_atomic_write_propagates_conversion_failed_error_from_write_fn_unchanged(tmp_path):
+    def write(tmp_output: Path) -> None:
+        raise ConversionFailedError("SomeBackend failed to do the specific thing")
+
+    with pytest.raises(ConversionFailedError, match="failed to do the specific thing"):
+        atomic_write(tmp_path / "out.txt", "SomeBackend", write)
+
+
+def test_atomic_write_propagates_converter_unavailable_error_from_write_fn_unchanged(tmp_path):
+    # Regression: the safety net below must only catch non-ProteusError
+    # exceptions — a write_fn that raises ConverterUnavailableError (e.g.
+    # pandoc.py's run_subprocess()) must not have it silently reclassified
+    # into a generic ConversionFailedError.
+    def write(tmp_output: Path) -> None:
+        raise ConverterUnavailableError("some-tool not found")
+
+    with pytest.raises(ConverterUnavailableError, match="some-tool not found"):
+        atomic_write(tmp_path / "out.txt", "SomeBackend", write)
+
+
+def test_atomic_write_wraps_a_write_fn_that_forgot_to_raise_conversionfailederror(tmp_path):
+    # Safety net only — every real write_fn is expected to raise
+    # ConversionFailedError itself with its own wording; this covers the
+    # "forgot to wrap" bug case so a bare exception still can't leak past
+    # the "converters only ever raise ProteusError" contract.
+    def write(tmp_output: Path) -> None:
+        raise ValueError("oops, forgot to wrap this")
+
+    with pytest.raises(ConversionFailedError, match="SomeBackend"):
+        atomic_write(tmp_path / "out.txt", "SomeBackend", write)
+
+
+def test_atomic_write_does_not_destroy_pre_existing_output_on_write_fn_failure(tmp_path):
+    output_path = tmp_path / "out.txt"
+    output_path.write_text("important pre-existing content")
+
+    def write(tmp_output: Path) -> None:
+        raise ConversionFailedError("boom")
+
+    with pytest.raises(ConversionFailedError):
+        atomic_write(output_path, "SomeBackend", write)
+
+    assert output_path.read_text() == "important pre-existing content"
+    assert list(tmp_path.glob(".proteus-tmp-*")) == []
+
+
+def test_atomic_write_raises_if_write_fn_produces_an_empty_file(tmp_path):
+    def write(tmp_output: Path) -> None:
+        tmp_output.write_bytes(b"")  # reports success but writes nothing
+
+    with pytest.raises(ConversionFailedError, match="is empty"):
+        atomic_write(tmp_path / "out.txt", "SomeBackend", write)

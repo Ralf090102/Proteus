@@ -17,8 +17,6 @@ eagerly regardless of which pair is actually being run.
 from __future__ import annotations
 
 import math
-import os
-import uuid
 from pathlib import Path
 
 from proteus.core.converter import (
@@ -26,7 +24,7 @@ from proteus.core.converter import (
     ConversionResult,
     Converter,
     ToolCheck,
-    ensure_output_created,
+    atomic_write,
 )
 from proteus.core.dependencies import AvailabilityStatus
 from proteus.core.errors import ConversionFailedError, ConverterUnavailableError
@@ -135,21 +133,15 @@ class PillowConverter(Converter):
                 f"extra: {PILLOW_INSTALL_HINT}"
             ) from e
 
-        # Write to a temp file in output_path's own directory (same drive,
-        # so os.replace() below is atomic) rather than letting Pillow save
-        # to output_path directly: Image.save() opens its target in
-        # "w+b" mode, which truncates a pre-existing file to 0 bytes
-        # *before* encoding a single byte, and only cleans up on failure
-        # if the file didn't already exist beforehand — confirmed
-        # empirically. So a save failure partway through (a source mode
-        # not handled below, disk full, a locked destination) would
-        # otherwise destroy whatever was already at output_path with no
-        # recovery. Same reasoning as LibreOffice's shutil.move, simpler
-        # here since the temp file lives right next to the destination.
-        tmp_output = output_path.with_name(
-            f".proteus-tmp-{uuid.uuid4().hex}{output_path.suffix}"
-        )
-        try:
+        def write(tmp_output: Path) -> None:
+            # Image.save() opens its target in "w+b" mode, which truncates
+            # a pre-existing file to 0 bytes *before* encoding a single
+            # byte — confirmed empirically. atomic_write() (core/
+            # converter.py) is what keeps a save failure partway through
+            # (a source mode not handled below, disk full, a locked
+            # destination) from destroying whatever was already at
+            # output_path; this function only needs to write to tmp_output
+            # and raise ConversionFailedError on its own failure.
             try:
                 target_format = _PILLOW_FORMAT[self.to_ext]
                 save_kwargs: dict[str, object] = {}
@@ -184,20 +176,7 @@ class PillowConverter(Converter):
             except Exception as e:
                 raise ConversionFailedError(f"Pillow failed to convert {input_path}: {e}") from e
 
-            ensure_output_created(tmp_output, "Pillow")
-
-            try:
-                os.replace(tmp_output, output_path)
-            except OSError as e:
-                raise ConversionFailedError(
-                    f"Pillow produced {tmp_output} but couldn't move it to "
-                    f"{output_path} (destination may be open elsewhere): {e}"
-                ) from e
-        except Exception:
-            tmp_output.unlink(missing_ok=True)
-            raise
-
-        return ConversionResult(output_path=output_path)
+        return atomic_write(output_path, "Pillow", write)
 
 
 class PngToJpgConverter(PillowConverter):

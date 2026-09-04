@@ -13,14 +13,17 @@ and registry entry can compare them directly.
 
 from __future__ import annotations
 
+import os
+import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
 from typing import ClassVar, NamedTuple
 
 from pydantic import BaseModel, ConfigDict
 
 from proteus.core.dependencies import AvailabilityStatus
-from proteus.core.errors import ConversionFailedError
+from proteus.core.errors import ConversionFailedError, ProteusError
 
 
 class ConversionOptions(BaseModel):
@@ -57,6 +60,69 @@ def ensure_output_created(output_path: Path, backend_name: str) -> None:
         raise ConversionFailedError(
             f"{backend_name} reported success but {output_path} is empty"
         )
+
+
+def atomic_write(
+    output_path: Path, backend_name: str, write_fn: Callable[[Path], None]
+) -> ConversionResult:
+    """Shared write-to-temp/verify/replace-in mechanics for every
+    Converter/Merger that writes its own output file directly (as opposed
+    to LibreOfficeConverter, which stages output in a temp *directory*
+    because soffice — not Proteus — picks the output filename, and
+    finishes with shutil.move for cross-drive safety; that's a genuinely
+    different problem and deliberately doesn't use this helper).
+
+    write_fn(tmp_path) must produce the real output at tmp_path and raise
+    ConversionFailedError itself on failure, with its own converter-
+    specific verb/subject wording (e.g. "Pillow failed to convert
+    {input_path}: {e}") — this function does NOT generically wrap
+    write_fn's exceptions into a one-size-fits-all message, since the
+    right wording (what verb, input_path vs. output_path as the subject)
+    genuinely varies per caller and a shared template can't reproduce
+    that without turning this into a multi-parameter, shallower interface.
+    The bare `except Exception` below is a last-resort safety net only —
+    for a write_fn that has a bug and forgets to wrap — not the primary
+    error path; every Converter/Merger docstring in this codebase treats
+    "never raise a bare Exception" as a hard invariant, worth defending
+    even against a future write_fn's own mistake.
+
+    Writes to a temp file in output_path's own directory (same drive, so
+    os.replace() below is atomic) rather than letting write_fn target
+    output_path directly — a mid-write failure must not destroy whatever
+    was already at output_path (the exact data-loss bug independently
+    found and fixed in converters/image.py and converters/pandoc.py
+    before this helper existed to prevent it happening a third time).
+    """
+    tmp_output = output_path.with_name(f".proteus-tmp-{uuid.uuid4().hex}{output_path.suffix}")
+    try:
+        try:
+            write_fn(tmp_output)
+        except ProteusError:
+            # Any typed Proteus error write_fn already raised on purpose
+            # (ConversionFailedError with its own wording, or e.g.
+            # ConverterUnavailableError from a subprocess helper like
+            # pandoc.py's run_subprocess()) — propagate as-is, don't
+            # reclassify it as the generic safety-net message below.
+            raise
+        except Exception as e:
+            raise ConversionFailedError(
+                f"{backend_name}: unexpected failure writing to {output_path}: {e}"
+            ) from e
+
+        ensure_output_created(tmp_output, backend_name)
+
+        try:
+            os.replace(tmp_output, output_path)
+        except OSError as e:
+            raise ConversionFailedError(
+                f"{backend_name} produced {tmp_output} but couldn't move it to "
+                f"{output_path} (destination may be open elsewhere): {e}"
+            ) from e
+    except Exception:
+        tmp_output.unlink(missing_ok=True)
+        raise
+
+    return ConversionResult(output_path=output_path)
 
 
 class ToolCheck(NamedTuple):

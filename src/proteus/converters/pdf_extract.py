@@ -22,8 +22,6 @@ pdf->txt, the two pairs that actually need it.
 from __future__ import annotations
 
 import io
-import os
-import uuid
 from pathlib import Path
 
 from proteus.core.converter import (
@@ -31,6 +29,7 @@ from proteus.core.converter import (
     ConversionResult,
     Converter,
     ToolCheck,
+    atomic_write,
     ensure_output_created,
 )
 from proteus.core.dependencies import AvailabilityStatus
@@ -87,15 +86,8 @@ class PyMuPdfTextExtractConverter(Converter):
     ) -> ConversionResult:
         """Extract text via PyMuPDF (imported as `pymupdf` — the `fitz`
         alias is deprecated as of the pinned version)."""
-        # Atomic-write pattern, matching PdfToMarkdownConverter/
-        # converters/image.py: writing straight to output_path (the
-        # previous behavior here) would destroy a pre-existing file on a
-        # mid-extraction failure — the same data-loss class fixed
-        # elsewhere this session, closed out here too rather than left
-        # inconsistent with every other converter that writes its own
-        # output file directly.
-        tmp_output = output_path.with_name(f".proteus-tmp-{uuid.uuid4().hex}{output_path.suffix}")
-        try:
+
+        def write(tmp_output: Path) -> None:
             try:
                 import pymupdf
 
@@ -107,20 +99,7 @@ class PyMuPdfTextExtractConverter(Converter):
                     f"PyMuPDF failed to extract text from {input_path}: {e}"
                 ) from e
 
-            ensure_output_created(tmp_output, "PyMuPDF")
-
-            try:
-                os.replace(tmp_output, output_path)
-            except OSError as e:
-                raise ConversionFailedError(
-                    f"PyMuPDF produced {tmp_output} but couldn't move it to "
-                    f"{output_path} (destination may be open elsewhere): {e}"
-                ) from e
-        except Exception:
-            tmp_output.unlink(missing_ok=True)
-            raise
-
-        return ConversionResult(output_path=output_path)
+        return atomic_write(output_path, "PyMuPDF", write)
 
 
 def _current_pymupdf_message_stream(pymupdf_module):
@@ -249,13 +228,7 @@ class PdfToMarkdownConverter(Converter):
                 f"extra: {PYMUPDF4LLM_INSTALL_HINT}"
             ) from e
 
-        # Same atomic-write pattern as converters/image.py: write to a temp
-        # file in output_path's own directory, then os.replace() it in —
-        # writing straight to output_path would destroy a pre-existing file
-        # on a mid-conversion failure (the same data-loss class fixed
-        # 2026-09-02 in converters/pandoc.py and converters/image.py).
-        tmp_output = output_path.with_name(f".proteus-tmp-{uuid.uuid4().hex}{output_path.suffix}")
-        try:
+        def write(tmp_output: Path) -> None:
             try:
                 md_text = _run_pymupdf4llm_to_markdown(input_path)
                 tmp_output.write_text(md_text, encoding="utf-8")
@@ -266,17 +239,4 @@ class PdfToMarkdownConverter(Converter):
                     f"pymupdf4llm failed to convert {input_path}: {e}"
                 ) from e
 
-            ensure_output_created(tmp_output, "pymupdf4llm")
-
-            try:
-                os.replace(tmp_output, output_path)
-            except OSError as e:
-                raise ConversionFailedError(
-                    f"pymupdf4llm produced {tmp_output} but couldn't move it to "
-                    f"{output_path} (destination may be open elsewhere): {e}"
-                ) from e
-        except Exception:
-            tmp_output.unlink(missing_ok=True)
-            raise
-
-        return ConversionResult(output_path=output_path)
+        return atomic_write(output_path, "pymupdf4llm", write)

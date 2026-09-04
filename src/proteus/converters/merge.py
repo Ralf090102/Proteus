@@ -11,12 +11,10 @@ invocation) as converters/pdf_extract.py.
 
 from __future__ import annotations
 
-import os
-import uuid
 from pathlib import Path
 
 from proteus.converters.image import _PDF_SAFE_MODES, PILLOW_INSTALL_HINT, _resolve_pdf_dpi
-from proteus.core.converter import ConversionResult, ensure_output_created
+from proteus.core.converter import ConversionResult, atomic_write
 from proteus.core.errors import ConversionFailedError, ConverterUnavailableError
 from proteus.core.merger import Merger
 
@@ -25,37 +23,6 @@ from proteus.core.merger import Merger
 # a join point without assuming anything about either file's own structure
 # (a bare blank line alone could be mistaken for the source's own spacing).
 _TEXT_JOIN_SEPARATOR = "\n\n---\n\n"
-
-
-def _atomic_write_bytes(output_path: Path, backend_name: str, write_fn) -> None:
-    """Shared atomic-write wrapper: write_fn(tmp_path) produces the merged
-    file at tmp_path, which is then verified non-empty and moved into
-    place with os.replace() — same pattern every existing converter uses
-    (converters/image.py, converters/pdf_extract.py), factored out here
-    since all three mergers below need it identically."""
-    tmp_output = output_path.with_name(f".proteus-tmp-{uuid.uuid4().hex}{output_path.suffix}")
-    try:
-        try:
-            write_fn(tmp_output)
-        except ConversionFailedError:
-            raise
-        except Exception as e:
-            raise ConversionFailedError(
-                f"{backend_name} failed to merge into {output_path}: {e}"
-            ) from e
-
-        ensure_output_created(tmp_output, backend_name)
-
-        try:
-            os.replace(tmp_output, output_path)
-        except OSError as e:
-            raise ConversionFailedError(
-                f"{backend_name} produced {tmp_output} but couldn't move it to "
-                f"{output_path} (destination may be open elsewhere): {e}"
-            ) from e
-    except Exception:
-        tmp_output.unlink(missing_ok=True)
-        raise
 
 
 class PdfMerger(Merger):
@@ -67,16 +34,20 @@ class PdfMerger(Merger):
 
     def merge(self, input_paths: list[Path], output_path: Path) -> ConversionResult:
         def write(tmp_output: Path) -> None:
-            import pymupdf
+            try:
+                import pymupdf
 
-            with pymupdf.open() as merged:
-                for path in input_paths:
-                    with pymupdf.open(str(path)) as src:
-                        merged.insert_pdf(src)
-                merged.save(str(tmp_output))
+                with pymupdf.open() as merged:
+                    for path in input_paths:
+                        with pymupdf.open(str(path)) as src:
+                            merged.insert_pdf(src)
+                    merged.save(str(tmp_output))
+            except Exception as e:
+                raise ConversionFailedError(
+                    f"pymupdf failed to merge into {output_path}: {e}"
+                ) from e
 
-        _atomic_write_bytes(output_path, "pymupdf", write)
-        return ConversionResult(output_path=output_path)
+        return atomic_write(output_path, "pymupdf", write)
 
 
 class _TextConcatMerger(Merger):
@@ -88,11 +59,15 @@ class _TextConcatMerger(Merger):
 
     def merge(self, input_paths: list[Path], output_path: Path) -> ConversionResult:
         def write(tmp_output: Path) -> None:
-            contents = [path.read_text(encoding="utf-8") for path in input_paths]
-            tmp_output.write_text(_TEXT_JOIN_SEPARATOR.join(contents), encoding="utf-8")
+            try:
+                contents = [path.read_text(encoding="utf-8") for path in input_paths]
+                tmp_output.write_text(_TEXT_JOIN_SEPARATOR.join(contents), encoding="utf-8")
+            except Exception as e:
+                raise ConversionFailedError(
+                    f"text-merge failed to merge into {output_path}: {e}"
+                ) from e
 
-        _atomic_write_bytes(output_path, "text-merge", write)
-        return ConversionResult(output_path=output_path)
+        return atomic_write(output_path, "text-merge", write)
 
 
 class MarkdownMerger(_TextConcatMerger):
@@ -147,39 +122,43 @@ class ImagesToPdfMerger(Merger):
             # below instead of relying on GC to eventually finalize them.
             opened: list[Image.Image] = []
             try:
-                for path in input_paths:
-                    opened.append(Image.open(path))
-                # Confirmed directly against Pillow's PdfImagePlugin
-                # source: a multi-page save reads `dpi=` once, from the
-                # *first* image's encoderinfo, and applies it to every
-                # page's MediaBox uniformly — per-page DPI is silently
-                # ignored for pages 2+ regardless of what's passed here.
-                # So only the first image's own DPI is worth resolving;
-                # a source set with genuinely mixed native DPIs (a phone
-                # photo alongside a scanned document, say) will have every
-                # page after the first sized using the first page's DPI,
-                # not its own. Accepted limitation — no clean per-page
-                # workaround exists through Pillow's single save() call.
-                pages = []
-                for img in opened:
-                    if img.mode not in _PDF_SAFE_MODES:
-                        img = img.convert("RGB")
-                    pages.append(img)
-                first_dpi = _resolve_pdf_dpi(opened[0])
-                first_img, rest_imgs = pages[0], pages[1:]
-                first_img.save(
-                    tmp_output,
-                    format="PDF",
-                    save_all=True,
-                    append_images=rest_imgs,
-                    dpi=first_dpi,
-                )
-            finally:
-                for img in opened:
-                    img.close()
+                try:
+                    for path in input_paths:
+                        opened.append(Image.open(path))
+                    # Confirmed directly against Pillow's PdfImagePlugin
+                    # source: a multi-page save reads `dpi=` once, from the
+                    # *first* image's encoderinfo, and applies it to every
+                    # page's MediaBox uniformly — per-page DPI is silently
+                    # ignored for pages 2+ regardless of what's passed here.
+                    # So only the first image's own DPI is worth resolving;
+                    # a source set with genuinely mixed native DPIs (a phone
+                    # photo alongside a scanned document, say) will have every
+                    # page after the first sized using the first page's DPI,
+                    # not its own. Accepted limitation — no clean per-page
+                    # workaround exists through Pillow's single save() call.
+                    pages = []
+                    for img in opened:
+                        if img.mode not in _PDF_SAFE_MODES:
+                            img = img.convert("RGB")
+                        pages.append(img)
+                    first_dpi = _resolve_pdf_dpi(opened[0])
+                    first_img, rest_imgs = pages[0], pages[1:]
+                    first_img.save(
+                        tmp_output,
+                        format="PDF",
+                        save_all=True,
+                        append_images=rest_imgs,
+                        dpi=first_dpi,
+                    )
+                finally:
+                    for img in opened:
+                        img.close()
+            except Exception as e:
+                raise ConversionFailedError(
+                    f"Pillow failed to merge into {output_path}: {e}"
+                ) from e
 
-        _atomic_write_bytes(output_path, "Pillow", write)
-        return ConversionResult(output_path=output_path)
+        return atomic_write(output_path, "Pillow", write)
 
 
 class PngImagesToPdfMerger(ImagesToPdfMerger):
