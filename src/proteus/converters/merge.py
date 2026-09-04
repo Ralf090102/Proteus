@@ -140,8 +140,15 @@ class ImagesToPdfMerger(Merger):
             ) from e
 
         def write(tmp_output: Path) -> None:
-            opened = [Image.open(path) for path in input_paths]
+            # Opened one at a time inside the try (not a list comprehension
+            # ahead of it) so that if Image.open() raises partway through
+            # (e.g. a corrupt file after N good ones), the already-opened
+            # images are still deterministically closed by the finally
+            # below instead of relying on GC to eventually finalize them.
+            opened: list[Image.Image] = []
             try:
+                for path in input_paths:
+                    opened.append(Image.open(path))
                 # Confirmed directly against Pillow's PdfImagePlugin
                 # source: a multi-page save reads `dpi=` once, from the
                 # *first* image's encoderinfo, and applies it to every

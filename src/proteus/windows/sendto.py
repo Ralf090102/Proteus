@@ -115,9 +115,16 @@ def uninstall() -> list[str]:
     Safe to call even if nothing (or only some) were installed — a
     missing .lnk is skipped, not an error, matching
     context_menu.uninstall()'s existing contract. Returns the labels
-    actually removed, determined by which .lnk files genuinely existed
-    (not by TARGET_LABELS' current contents), same "report what was
-    actually there" reasoning context_menu.uninstall() already uses.
+    actually removed: only those whose .lnk file genuinely existed among
+    TARGET_LABELS' *current* names get unlinked and reported.
+
+    Unlike context_menu.uninstall() — which enumerates the live registry
+    subkeys actually present, so it also catches entries from a pair
+    that's since been removed from CONVERTER_REGISTRY — this checks a
+    fixed candidate list derived from today's TARGET_LABELS rather than
+    scanning SENDTO_DIR itself. A shortcut installed under a label that
+    is later renamed or removed from TARGET_LABELS won't be found here
+    and will be left behind as an orphaned .lnk file.
     """
     removed = []
     for name in _shortcut_names():
